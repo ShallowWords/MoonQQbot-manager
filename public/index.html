@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QQBOT 控制台</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="shell">
+
+  <!-- 左侧导航 -->
+  <aside class="sidebar">
+    <div class="logo">
+      <span class="logo-mark"></span>
+      <span class="logo-text">QQBOT 控制台</span>
+    </div>
+
+    <div class="side-group">
+      <div class="side-label">
+        <span>机器人</span>
+        <button class="add-btn" id="btn-add-bot" title="添加机器人">＋</button>
+      </div>
+      <div class="side-list" id="bot-list"></div>
+    </div>
+
+    <div class="side-group">
+      <div class="side-label">
+        <span>模型</span>
+        <button class="add-btn" id="btn-add-model" title="添加模型">＋</button>
+      </div>
+      <div class="side-list" id="model-list"></div>
+    </div>
+
+    <div class="side-foot">
+      <span class="dot" id="status-dot"></span>
+      <span class="conn" id="conn-text">连接中…</span>
+      <button class="foot-btn" id="btn-theme" title="切换亮/暗主题">☾</button>
+      <button class="foot-btn" id="btn-refresh" title="刷新">↻</button>
+    </div>
+  </aside>
+
+  <!-- 主内容区 -->
+  <main class="main" id="main"></main>
+
+</div>
+
+<div id="toast" class="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

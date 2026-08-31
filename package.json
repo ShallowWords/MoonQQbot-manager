@@ -1,0 +1,15 @@
+{
+  "name": "qqbot-manager",
+  "version": "1.0.0",
+  "description": "QQ 机器人管理面板：多机器人 + 记忆文档 + 模型接入",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "start.cmd": "start",
+    "up": "node server.js"
+  },
+  "dependencies": {
+    "qq-guild-bot": "^2.7.0",
+    "ws": "^8.18.0"
+  }
+}
