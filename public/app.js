@@ -4,6 +4,7 @@
 let state = null;            // { bots, models }
 let view = { type: 'bot', id: null };   // 当前视图
 let lastSender = '';         // 最近一次消息发送者（方便主动回复）
+let masterSender = '';       // 主 ID：第一个对话者（主动发消息默认目标）
 
 const $ = (s) => document.querySelector(s);
 const main = $('#main');
@@ -92,6 +93,7 @@ function renderMain() {
   if (view.type === 'bot-form') return renderBotForm(view.id);
   if (view.type === 'model-form') return renderModelForm(view.id);
   if (view.type === 'model') return renderModelDetail(view.id);
+  if (view.type === 'settings') return renderSettings();
   return renderBotDetail(view.id);
 }
 
@@ -185,6 +187,13 @@ function renderBotDetail(id) {
           <button class="ghost sm" onclick="openFolder('${b.id}')">打开文件夹</button>
           <button class="ghost sm" onclick="newMemoryFile('${b.id}')">＋ 新增文件</button>
         </div>
+        <div class="mem-global">
+          <label class="switch" title="勾选后读取设置中的全局用户设定与全局提示词">
+            <input type="checkbox" ${b.useGlobal !== false ? 'checked' : ''} onchange="toggleGlobalSetting('${b.id}', this.checked)">
+            <span class="slider"></span>
+          </label>
+          <span class="mem-global-text">采用全局设定<span class="mem-global-sub">勾选后，对话时先读取「⚙ 设置」中的全局用户设定与全局提示词，再读取下方记忆文件；取消勾选则仅使用下方记忆库文件</span></span>
+        </div>
         <div class="mem-files" id="mem-files"></div>
         <div class="ingest-box">
           <textarea id="f-ingest" rows="1" placeholder="概述新剧情 / 内容，AI 自动归类写入对应记忆文件…"></textarea>
@@ -214,7 +223,7 @@ function renderBotDetail(id) {
         </div>
         <div class="frm-row">
           <label class="frm">目标 openid${lastSender ? '（最近发送者：' + esc(lastSender.slice(0, 14)) + '… <a style="color:var(--accent);cursor:pointer" onclick="useLastSender()">填入</a>）' : ''}</label>
-          <input id="f-target" type="text" placeholder="如 119F66669BDB820635DB47B413FBA648">
+          <input id="f-target" type="text" placeholder="默认为主 ID（第一个对话者），可修改">
         </div>
         <div class="frm-row">
           <label class="frm">内容</label>
@@ -241,6 +250,179 @@ function pickScene(el) {
   document.querySelectorAll('#scene-pick .chip').forEach(c => c.classList.toggle('active', c === el));
 }
 function useLastSender() { $('#f-target').value = lastSender; }
+
+// 左下角「设置」按钮 → 设置页（全局用户设定 + 全局提示词）
+function openSettings() {
+  view = { type: 'settings' };
+  renderSidebar();
+  renderMain();
+}
+
+// ---- 设置页：左列全局设定（多文件 + 开关 + 编辑），右列 Token 统计 ----
+let _gFiles = [];    // 全局文件列表缓存（含内容）
+let _gKey = '';      // 当前正在编辑的全局文件 key
+
+function renderSettings() {
+  main.innerHTML = `
+    <div class="page-head">
+      <h2>设置</h2>
+      <span class="spacer"></span>
+      <button class="ghost sm" onclick="backFromSettings()">← 返回</button>
+    </div>
+    ${renderAppearance()}
+    <div class="settings-grid">
+      <div class="card">
+        <div class="card-title">全局设定（机器人勾选「采用全局设定」时生效）
+          <span class="spacer"></span>
+          <button class="ghost sm" onclick="newGlobalFile()">＋ 新增文件</button>
+        </div>
+        <div class="mem-files" id="g-files"><div class="empty-hint">加载中…</div></div>
+        <div class="g-edit">
+          <div class="g-edit-bar">
+            <span class="g-edit-name" id="g-edit-name">点击上方文件编辑内容</span>
+            <span class="spacer"></span>
+            <button class="primary sm" id="g-save-btn" onclick="saveGlobalFile()" style="display:none">保存</button>
+          </div>
+          <textarea id="g-content" rows="12" placeholder="选择上方文件，在此编辑内容…" disabled></textarea>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Token 消耗统计</div>
+        <div id="usage-stats" class="usage-stats"><div class="empty-hint">加载中…</div></div>
+      </div>
+    </div>`;
+  _gFiles = [];
+  _gKey = '';
+  loadGlobalFiles();
+  loadUsageStats();
+}
+
+function backFromSettings() {
+  view = { type: 'bot', id: (state.bots || [])[0]?.id || null };
+  renderSidebar(); renderMain();
+}
+
+// ---- 全局文件管理 ----
+async function loadGlobalFiles() {
+  const r = await api('/api/global/files');
+  _gFiles = r.files || [];
+  if (!_gKey && _gFiles.length) _gKey = _gFiles[0].key;
+  renderGlobalFiles();
+  renderGlobalEdit();
+}
+
+function renderGlobalFiles() {
+  const el = $('#g-files');
+  if (!el) return;
+  if (!_gFiles.length) { el.innerHTML = '<div class="empty-hint">暂无全局文件，点击右上角 ＋ 新增</div>'; return; }
+  el.innerHTML = _gFiles.map(f => `
+    <div class="mem-file ${f.enabled ? '' : 'disabled'} ${_gKey === f.key ? 'active' : ''}" onclick="selectGlobalFile('${f.key}')">
+      <label class="switch" onclick="event.stopPropagation()" title="${f.enabled ? '点击禁用' : '点击启用'}">
+        <input type="checkbox" ${f.enabled ? 'checked' : ''} onchange="toggleGlobalFile('${f.key}', this.checked)">
+        <span class="slider"></span>
+      </label>
+      <span class="mf-name">${esc(f.name)}</span>
+      <span class="mf-desc">${esc(f.desc)}</span>
+      <span class="mf-state">${f.enabled ? '启用' : '已禁用'}</span>
+      <button class="ghost sm" onclick="event.stopPropagation();delGlobalFile('${f.key}')" title="删除文件">✕</button>
+    </div>`).join('');
+}
+
+function selectGlobalFile(key) {
+  _gKey = key;
+  renderGlobalFiles();
+  renderGlobalEdit();
+}
+
+function renderGlobalEdit() {
+  const ta = $('#g-content');
+  const nameEl = $('#g-edit-name');
+  const btn = $('#g-save-btn');
+  if (!ta || !nameEl || !btn) return;
+  const f = _gFiles.find(x => x.key === _gKey);
+  if (!f) {
+    ta.value = '';
+    ta.disabled = true;
+    nameEl.textContent = '点击上方文件编辑内容';
+    btn.style.display = 'none';
+    return;
+  }
+  ta.value = f.content || '';
+  ta.disabled = false;
+  nameEl.textContent = `编辑：${f.name}（${f.key}.md）`;
+  btn.style.display = '';
+}
+
+async function toggleGlobalFile(key, enabled) {
+  const r = await api(`/api/global/files/${key}/enabled`, 'PUT', { enabled });
+  r.ok ? toast(`已${enabled ? '启用' : '禁用'}「${key}」`, 'ok') : toast(r.err, 'err');
+  if (r.ok) loadGlobalFiles();
+}
+
+async function saveGlobalFile() {
+  if (!_gKey) return toast('请先选择文件', 'err');
+  const r = await api(`/api/global/files/${_gKey}`, 'PUT', { content: $('#g-content').value });
+  r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
+  if (r.ok) loadGlobalFiles();
+}
+
+async function newGlobalFile() {
+  const name = prompt('新建全局文件名（如：通用规则、开场白、禁忌表…）');
+  if (!name) return;
+  const key = name.trim().replace(/\.md$/i, '').replace(/[^\w\u4e00-\u9fa5-]/g, '_');
+  if (!key) return toast('文件名无效', 'err');
+  const r = await api('/api/global/files', 'POST', { key });
+  r.ok ? toast('已创建全局文件：' + key, 'ok') : toast(r.err, 'err');
+  if (r.ok) { _gKey = key; loadGlobalFiles(); }
+}
+
+async function delGlobalFile(key) {
+  if (!confirm(`确定删除全局文件「${key}.md」？`)) return;
+  const r = await api(`/api/global/files/${key}`, 'DELETE');
+  r.ok ? toast('已删除', 'ok') : toast(r.err, 'err');
+  if (r.ok) { if (_gKey === key) _gKey = ''; loadGlobalFiles(); }
+}
+
+// ---- Token 用量统计 ----
+function fmtNum(n) { return Number(n || 0).toLocaleString('zh-CN'); }
+
+async function loadUsageStats() {
+  const r = await api('/api/usage');
+  const el = $('#usage-stats');
+  if (!el) return;
+  if (!r.ok) { el.innerHTML = '<div class="empty-hint">' + esc(r.err) + '</div>'; return; }
+  const u = r.stats;
+  const byBot = u.byBot || [];
+  const byDay = u.byDay || [];
+  const maxBot = Math.max(1, ...byBot.map(x => x.total));
+  const maxDay = Math.max(1, ...byDay.map(d => d.total));
+  el.innerHTML = `
+    <div class="stat-cards">
+      <div class="stat-card"><label>累计 Tokens</label><div>${fmtNum(u.total.total)}</div><span>输入 ${fmtNum(u.total.prompt)} · 输出 ${fmtNum(u.total.completion)}</span></div>
+      <div class="stat-card"><label>今日 Tokens</label><div>${fmtNum(u.today.total)}</div><span>${u.today.calls} 次调用 · 失败 ${u.today.failed || 0}</span></div>
+      <div class="stat-card"><label>总调用次数</label><div>${u.total.calls}</div><span>成功 ${u.total.ok || 0} · 失败 ${u.total.failed || 0} · 平均 ${u.total.calls ? Math.round(u.total.total / u.total.calls) : 0} tokens/次</span></div>
+    </div>
+    <div class="stat-sec">
+      <label>按机器人</label>
+      ${byBot.length ? byBot.map(x => `
+        <div class="bar-row">
+          <span class="bar-label">${esc(x.botId)}</span>
+          <div class="bar-track"><div class="bar-fill" style="width:${Math.round(x.total / maxBot * 100)}%"></div></div>
+          <span class="bar-val">${fmtNum(x.total)}</span>
+        </div>`).join('') : '<div class="empty-hint">暂无数据，对话后生成</div>'}
+    </div>
+    <div class="stat-sec">
+      <label>近 14 天</label>
+      <div class="bar-days">
+        ${byDay.map(d => `
+        <div class="bar-day" title="${esc(d.date)}：${fmtNum(d.total)} tokens">
+          <div class="bar-day-col" style="height:${d.total ? Math.max(3, Math.round(d.total / maxDay * 100)) : 2}%"></div>
+          <span class="bar-day-date">${esc(d.date.slice(5))}</span>
+        </div>`).join('')}
+      </div>
+    </div>
+    <div class="usage-note">统计口径：成功调用按模型返回的 usage 精确计；失败调用按本地字符估算（失败请求同样消耗 token）；与平台账单可能存在小幅差异。</div>`;
+}
 
 // ---- 记忆库（文件开关列表 + AI 自动归档） ----
 async function loadMemoryFiles(id) {
@@ -272,6 +454,14 @@ async function toggleFile(id, key, enabled) {
   const r = await api(`/api/memory/${id}/files/${key}/enabled`, 'PUT', { enabled });
   r.ok ? toast(`已${enabled ? '启用' : '禁用'}「${key}」`, 'ok') : toast(r.err, 'err');
   if (r.ok) loadMemoryFiles(id);
+}
+
+// 采用全局设定：勾选 → 对话时读取全局用户设定 + 全局提示词；取消 → 仅读取记忆库文件
+async function toggleGlobalSetting(id, checked) {
+  const bots = (state.bots || []).map(b => b.id === id ? { ...b, useGlobal: checked } : b);
+  const r = await api('/api/config', 'PUT', { bots });
+  r.ok ? toast(`已${checked ? '开启' : '关闭'}「采用全局设定」`, 'ok') : toast(r.err, 'err');
+  if (r.ok) loadState();
 }
 
 // AI 自动归档：概述 → AI 归类写入对应文件
@@ -351,12 +541,21 @@ async function loadSessions(id) {
   const r = await api(`/api/memory/${id}/sessions`);
   const list = r.sessions || [];
   if (r.lastSender) lastSender = r.lastSender;
+  // 主 ID：第一个对话者，主动发消息默认填入
+  if (r.masterSender) {
+    masterSender = r.masterSender;
+    const t = $('#f-target');
+    if (t && !t.value) t.value = masterSender;
+  }
   const el = $('#session-list');
   if (!el) return;
+  // 机器人头像（来自机器人配置），用户侧用 👤
+  const bot = (state.bots || []).find(x => x.id === id);
+  const botAvatar = bot ? avatarInner(bot) : '🤖';
   const html = list.length
     ? list.map(s => `
       <div class="session ${s.role === 'assistant' ? 'bot' : 'user'}">
-        <div class="who">${s.role === 'assistant' ? '🤖' : '👤'}</div>
+        <div class="who">${s.role === 'assistant' ? botAvatar : '👤'}</div>
         <div class="bubble md">${md(s.content)}<div class="time">${new Date(s.ts).toLocaleString()}</div></div>
       </div>`).join('')
     : '<div class="empty-hint">暂无会话记录</div>';
@@ -375,6 +574,7 @@ async function directChat(id) {
     const r = await api(`/api/bots/${id}/chat`, 'POST', { content });
     if (r.ok) {
       $('#f-chat').value = '';
+      toast(r.pushed ? '已回复，并自动推送给主 ID ✓' : '已回复（未设置主 ID）', 'ok');
       loadSessions(id);
     } else {
       toast('对话失败: ' + r.err, 'err');
@@ -407,8 +607,8 @@ function md(s) {
   h = h.replace(listRe, (m) => '<ul>' + m.split('\n').map(l => `<li>${l.replace(/^- /, '')}</li>`).join('') + '</ul>');
   const olRe = /(?:^\d+\. .+\n?)+/gm;
   h = h.replace(olRe, (m) => '<ol>' + m.split('\n').map(l => `<li>${l.replace(/^\d+\. /, '')}</li>`).join('') + '</ol>');
-  // 其余行 → 段落
-  h = h.replace(/^(?!<\/?(h[1-3]|pre|ul|ol|li|blockquote|p)|$)(.+)$/gm, '<p>$1</p>');
+  // 其余行 → 段落（负向断言内用非捕获组，保证 (.+) 是 $1）
+  h = h.replace(/^(?!<\/?(?:h[1-3]|pre|ul|ol|li|blockquote|p)|$)(.+)$/gm, '<p>$1</p>');
   h = h.replace(/\n+/g, '');
   return h;
 }
@@ -716,7 +916,22 @@ async function createModel() {
   if (r.ok) { view = { type: 'model', id: entry.id }; await loadState(); }
 }
 
-// ---------- 主题切换（亮/暗，localStorage 持久化） ----------
+// ---------- 主题（亮/暗 + 主题色，localStorage 持久化） ----------
+const DEFAULT_ACCENT = '#f5b301'; // 默认主题色（黄）
+
+// 设置主题色：覆盖 CSS 变量 --accent（--accent-strong/soft 等通过 color-mix 自动联动）
+function applyAccent(hex) {
+  const color = /^#([0-9a-fA-F]{6})$/.test(hex || '') ? hex : DEFAULT_ACCENT;
+  document.documentElement.style.setProperty('--accent', color);
+  document.documentElement.style.setProperty('--warn', color);
+  localStorage.setItem('qqbot-accent', color);
+  const swatches = document.querySelectorAll('.swatch');
+  swatches.forEach(s => s.classList.toggle('cur', s.dataset.c === color));
+  const picker = $('#accent-color');
+  if (picker) picker.value = color;
+  return color;
+}
+
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   localStorage.setItem('qqbot-theme', theme);
@@ -727,6 +942,42 @@ function applyTheme(theme) {
 function toggleTheme() {
   const cur = document.documentElement.getAttribute('data-theme') || 'dark';
   applyTheme(cur === 'dark' ? 'light' : 'dark');
+  if (view.type === 'settings') renderMain(); // 刷新外观卡片中的明暗按钮文字
+}
+
+// 预设主题色板
+const ACCENT_PRESETS = [DEFAULT_ACCENT, '#3b82f6', '#22c55e', '#8b5cf6', '#ef4444', '#06b6d4', '#f97316', '#ec4899'];
+
+function renderAppearance() {
+  const cur = document.documentElement.style.getPropertyValue('--accent') || localStorage.getItem('qqbot-accent') || DEFAULT_ACCENT;
+  return `
+    <div class="card">
+      <div class="card-title">外观（主题色）
+        <span class="spacer"></span>
+        <button class="ghost sm" onclick="resetAccent()">恢复默认</button>
+      </div>
+      <div class="theme-row">
+        <span class="theme-label">主题色</span>
+        <div class="swatches">
+          ${ACCENT_PRESETS.map(c => `<span class="swatch ${c === cur ? 'cur' : ''}" data-c="${c}" style="background:${c}" title="${c}" onclick="pickAccent('${c}')"></span>`).join('')}
+        </div>
+        <input type="color" id="accent-color" value="${cur}" onchange="pickAccent(this.value)" title="自定义颜色">
+      </div>
+      <div class="theme-row" style="margin-top:8px">
+        <span class="theme-label">明暗</span>
+        <button class="sm" id="appearance-theme" onclick="toggleTheme()">${document.documentElement.getAttribute('data-theme') === 'light' ? '☀ 亮色' : '☾ 暗色'}</button>
+      </div>
+    </div>`;
+}
+
+function pickAccent(hex) {
+  applyAccent(hex);
+  toast('主题色已更新', 'ok');
+}
+
+function resetAccent() {
+  applyAccent(DEFAULT_ACCENT);
+  toast('已恢复默认主题色', 'ok');
 }
 
 // ---------- 事件绑定 ----------
@@ -735,6 +986,7 @@ $('#btn-add-model').addEventListener('click', () => { view = { type: 'model-form
 $('#btn-refresh').addEventListener('click', loadState);
 $('#btn-theme').addEventListener('click', toggleTheme);
 
-// 启动：恢复主题 + 加载状态
-applyTheme(localStorage.getItem('qqbot-theme') || 'dark');
+// 启动：恢复主题 + 主题色 + 加载状态（默认亮色系）
+applyTheme(localStorage.getItem('qqbot-theme') || 'light');
+applyAccent(localStorage.getItem('qqbot-accent') || DEFAULT_ACCENT);
 loadState();

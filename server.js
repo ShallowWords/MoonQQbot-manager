@@ -50,8 +50,8 @@ async function chatWithBot(botId, content) {
   const apiKey = model.apiKey || app.env[model.apiKeyEnv];
   if (!apiKey) throw new Error('模型未配置 API Key');
 
-  // 多文件记忆库 → system prompt
-  const system = memory.buildSystemPrompt(botId) +
+  // 多文件记忆库 → system prompt（按机器人"采用全局设定"开关决定是否拼全局）
+  const system = memory.buildSystemPrompt(botId, { useGlobal: bot.useGlobal }) +
     '\n\n【记忆规则】\n对话中出现关键剧情变化（重要事件、人物关系变化、重大决定等）时，' +
     '在回复末尾单独附加一行，以【记录】开头并简述该关键剧情，格式：【记录】事件简述。';
   const history = memory.getRecentSessions(botId, bot.historyLimit || 10);
@@ -62,7 +62,16 @@ async function chatWithBot(botId, content) {
   for (const h of history.slice(0, -1)) messages.push({ role: h.role, content: h.content });
   messages.push({ role: 'user', content });
 
-  let reply = await models.chat(model, messages, { apiKey });
+  // 调用模型并记录用量：成功用模型返回的精确 usage，失败用本地估算兜底（失败请求同样计费）
+  let res;
+  try {
+    res = await models.chat(model, messages, { apiKey });
+  } catch (err) {
+    memory.recordUsage(botId, model.id, { promptTokens: err.promptTokens, ok: false });
+    throw err;
+  }
+  const reply = (res && typeof res === 'object' && 'content' in res) ? res.content : res;
+  memory.recordUsage(botId, model.id, { usage: res.usage, promptTokens: res.promptTokens, ok: true });
   if (!reply) return '';
 
   // 解析 AI 自动记录的关键剧情（【记录】xxx）
@@ -89,6 +98,7 @@ app.handleMessage = async (botId, evt) => {
   console.log(`[${evt.scene}:${botId}] ${username}: ${content}`);
   memory.appendSession(botId, 'user', content);
   memory.saveLastSender(botId, evt.sender);
+  memory.saveMasterSender(botId, evt.sender); // 第一个对话者即主 ID
 
   try {
     const reply = await chatWithBot(botId, content);
@@ -140,7 +150,12 @@ const server = http.createServer((req, res) => {
     return;
   }
   const ext = path.extname(full).toLowerCase();
-  res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+  // 面板页面/脚本/样式不做缓存，保证改版后刷新即可看到最新界面
+  const noCache = ['.html', '.js', '.css'].includes(ext);
+  res.writeHead(200, {
+    'Content-Type': MIME[ext] || 'application/octet-stream',
+    ...(noCache ? { 'Cache-Control': 'no-cache' } : {}),
+  });
   fs.createReadStream(full).pipe(res);
 });
 
@@ -232,6 +247,72 @@ function handleApi(req, res, u) {
     return;
   }
 
+  // ---- 全局设定（设置页管理：多文件 + 开关） ----
+  // GET /api/global/files — 全局记忆文件列表（含内容与启用状态）
+  if (p === '/api/global/files' && req.method === 'GET') return send(200, { ok: true, files: memory.getGlobalFiles() });
+  // POST /api/global/files — 新建全局文件 { key }
+  if (p === '/api/global/files' && req.method === 'POST') {
+    readBody((body) => {
+      try {
+        const key = (body.key || '').trim();
+        if (!key) return send(400, { ok: false, err: '缺少文件名 key' });
+        memory.saveGlobalFile(key, '');
+        send(200, { ok: true });
+      } catch (err) { send(500, { ok: false, err: err.message }); }
+    });
+    return;
+  }
+
+  // PUT /api/global/files/:key/enabled — 启用/禁用 { enabled }
+  let gm = /^\/api\/global\/files\/([\w\u4e00-\u9fa5-]+)\/enabled$/.exec(p);
+  if (gm && req.method === 'PUT') {
+    readBody((body) => {
+      try { memory.setGlobalFileEnabled(gm[1], body.enabled !== false); send(200, { ok: true }); }
+      catch (err) { send(500, { ok: false, err: err.message }); }
+    });
+    return;
+  }
+
+  // PUT /api/global/files/:key — 保存单个全局文件
+  gm = /^\/api\/global\/files\/([\w\u4e00-\u9fa5-]+)$/.exec(p);
+  if (gm && req.method === 'PUT') {
+    readBody((body) => {
+      try { memory.saveGlobalFile(gm[1], body.content || ''); send(200, { ok: true }); }
+      catch (err) { send(500, { ok: false, err: err.message }); }
+    });
+    return;
+  }
+  // DELETE /api/global/files/:key — 删除全局文件
+  if (gm && req.method === 'DELETE') {
+    try { memory.deleteGlobalFile(gm[1]); send(200, { ok: true }); }
+    catch (err) { send(500, { ok: false, err: err.message }); }
+    return;
+  }
+
+  // GET /api/usage — Token 用量统计
+  if (p === '/api/usage' && req.method === 'GET') return send(200, { ok: true, stats: memory.getUsageStats() });
+
+  // ---- 兼容旧接口 ----
+  // GET/PUT /api/user/global — 全局用户设定（= 全局文件 user）
+  if (p === '/api/user/global' && req.method === 'GET') return send(200, { ok: true, content: memory.getGlobalUser() });
+  if (p === '/api/user/global' && req.method === 'PUT') {
+    readBody((body) => {
+      try { memory.saveGlobalUser(body.content || ''); send(200, { ok: true }); }
+      catch (err) { send(500, { ok: false, err: err.message }); }
+    });
+    return;
+  }
+
+  // GET/PUT /api/prompt/global — 全局提示词（= 全局文件 prompt）
+  if (p === '/api/prompt/global' && req.method === 'GET') return send(200, { ok: true, content: memory.getGlobalPrompt() });
+  if (p === '/api/prompt/global' && req.method === 'PUT') {
+    readBody((body) => {
+      try { memory.saveGlobalPrompt(body.content || ''); send(200, { ok: true }); }
+      catch (err) { send(500, { ok: false, err: err.message }); }
+    });
+    return;
+  }
+
   // ---- 记忆 ----
   // GET /api/memory/:id/files — 全部记忆文件
   let m = /^\/api\/memory\/([\w\u4e00-\u9fa5-]+)\/files$/.exec(p);
@@ -300,7 +381,7 @@ function handleApi(req, res, u) {
 
   // GET /api/memory/:id/sessions
   m = /^\/api\/memory\/([\w\u4e00-\u9fa5-]+)\/sessions$/.exec(p);
-  if (m && req.method === 'GET') return send(200, { ok: true, sessions: memory.getRecentSessions(m[1], 200), lastSender: memory.getLastSender(m[1]) });
+  if (m && req.method === 'GET') return send(200, { ok: true, sessions: memory.getRecentSessions(m[1], 200), lastSender: memory.getLastSender(m[1]), masterSender: memory.getMasterSender(m[1]) });
 
   // DELETE /api/memory/:id/sessions
   if (m && req.method === 'DELETE') {
@@ -318,8 +399,14 @@ function handleApi(req, res, u) {
     const apiKey = model.apiKey || app.env[model.apiKeyEnv];
     if (!apiKey) return send(400, { ok: false, err: '该模型的 API Key 未配置（直接填 Key，或在 .env 设置对应变量）' });
     models.chat(model, [{ role: 'user', content: 'ping' }], { apiKey, maxTokens: 32 })
-      .then((reply) => send(200, { ok: true, reply: reply.slice(0, 200) }))
-      .catch((err) => send(200, { ok: false, err: err.message }));
+      .then((res) => {
+        memory.recordUsage(m[1], m[1], { usage: res.usage, promptTokens: res.promptTokens, ok: true });
+        send(200, { ok: true, reply: (res?.content ?? '').slice(0, 200) });
+      })
+      .catch((err) => {
+        memory.recordUsage(m[1], m[1], { promptTokens: err.promptTokens, ok: false });
+        send(200, { ok: false, err: err.message });
+      });
     return;
   }
 
@@ -393,7 +480,16 @@ ${listDesc}
 2. 输出一个或多个 JSON 对象，每行一个（不要任何其他文字，不要 markdown 代码块），格式：{"file":"<上面某个key>","append":true,"content":"<简洁的条目内容>"}
 3. content 中不要出现英文双引号，保持纯文本。
 4. append=true 表示在文件末尾追加一条。若新信息是对现有设定的整体替换（如角色状态彻底改变），可输出 append:false 且 content 为完整的替换内容（谨慎，勿覆盖无关内容）。`;
-        const reply = await models.chat(model, [{ role: 'system', content: sys }, { role: 'user', content: text }], { apiKey, maxTokens: 500 });
+        // 调用模型并记录用量：成功用精确 usage，失败用估算兜底
+        let res, reply;
+        try {
+          res = await models.chat(model, [{ role: 'system', content: sys }, { role: 'user', content: text }], { apiKey, maxTokens: 500 });
+          reply = res && typeof res === 'object' ? res.content : res;
+          memory.recordUsage(bot.id, model.id, { usage: res.usage, promptTokens: res.promptTokens, ok: true });
+        } catch (err) {
+          memory.recordUsage(bot.id, model.id, { promptTokens: err.promptTokens, ok: false });
+          throw err;
+        }
         const parsed = extractJsonObjects(reply);
         const enabledMap = new Map(files.map((f) => [f.key, f]));
         const results = [];
@@ -427,7 +523,19 @@ ${listDesc}
         const reply = await chatWithBot(m[1], content);
         if (!reply) return send(200, { ok: false, err: '模型返回为空' });
         memory.appendSession(m[1], 'assistant', reply);
-        send(200, { ok: true, reply });
+        // 默认把面板对话的输出主动发送给主 ID
+        const master = memory.getMasterSender(m[1]);
+        let pushed = false;
+        if (master) {
+          try {
+            const bot = cfg.bots.find((x) => x.id === m[1]);
+            if (bot) {
+              await app.bots.send(bot, 'c2c', master, reply.slice(0, 4000), '');
+              pushed = true;
+            }
+          } catch (e) { console.log(`[bot:${m[1]}] 主动推送主 ID 失败: ${e.message}`); }
+        }
+        send(200, { ok: true, reply, pushed });
       })().catch((err) => send(200, { ok: false, err: err.message }));
     });
     return;
