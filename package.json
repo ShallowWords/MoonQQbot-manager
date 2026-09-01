@@ -9,6 +9,7 @@
     "up": "node server.js"
   },
   "dependencies": {
+    "playwright": "^1.62.1",
     "qq-guild-bot": "^2.7.0",
     "ws": "^8.18.0"
   }

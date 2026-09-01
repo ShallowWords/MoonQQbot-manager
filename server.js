@@ -10,6 +10,7 @@ const { spawn } = require('node:child_process');
 const store = require('./lib/store');
 const memory = require('./lib/memory');
 const models = require('./lib/models');
+const search = require('./lib/search');
 const BotManager = require('./lib/bots');
 
 const ROOT = __dirname;
@@ -62,16 +63,64 @@ async function chatWithBot(botId, content) {
   for (const h of history.slice(0, -1)) messages.push({ role: h.role, content: h.content });
   messages.push({ role: 'user', content });
 
-  // 调用模型并记录用量：成功用模型返回的精确 usage，失败用本地估算兜底（失败请求同样计费）
-  let res;
-  try {
-    res = await models.chat(model, messages, { apiKey });
-  } catch (err) {
-    memory.recordUsage(botId, model.id, { promptTokens: err.promptTokens, ok: false });
-    throw err;
+  // 联网开关（三层优先级：机器人单独设置 > 设置页全局设置 > 模型默认设置）
+  // bot.webSearch: true/false 显式设置；undefined = 跟随全局
+  // cfg.webSearch: 设置页全局默认；model.webSearch: 模型级默认
+  let webEnabled;
+  if (bot.webSearch === true || bot.webSearch === false) webEnabled = bot.webSearch;
+  else if (cfg.webSearch === true || cfg.webSearch === false) webEnabled = cfg.webSearch;
+  else webEnabled = model.webSearch === true;
+  const WEB_TOOLS = webEnabled ? search.TOOLS : undefined;
+
+  // 调用模型（最多 3 轮工具循环）：模型可自主决定调用 web_search / web_fetch，
+  // 服务端在本地执行搜索/抓正文后把结果回传，模型基于结果作答。
+  // 用量记录：每轮成功用精确 usage，失败用本地估算兜底（失败请求同样计费）。
+  let reply = '';
+  let res = null;
+  let tools = WEB_TOOLS;
+  const MAX_ROUNDS = 3;
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    try {
+      res = await models.chat(model, messages, { apiKey, tools });
+    } catch (err) {
+      // 模型不支持 tools 时报错 → 去掉 tools 按普通对话重试一次
+      if (tools && /tool|function/i.test(err.message)) {
+        tools = undefined;
+        try {
+          res = await models.chat(model, messages, { apiKey });
+        } catch (err2) {
+          memory.recordUsage(botId, model.id, { promptTokens: err2.promptTokens, ok: false });
+          throw err2;
+        }
+      } else {
+        memory.recordUsage(botId, model.id, { promptTokens: err.promptTokens, ok: false });
+        throw err;
+      }
+    }
+    memory.recordUsage(botId, model.id, { usage: res.usage, promptTokens: res.promptTokens, ok: true });
+
+    const toolCalls = res.toolCalls;
+    if (!toolCalls || !toolCalls.length) { reply = res.content || ''; break; }
+
+    // 在本地执行模型请求的工具
+    for (const tc of toolCalls) {
+      let args = {};
+      try { args = JSON.parse(tc.function.arguments || '{}'); } catch {}
+      let content = '';
+      if (tc.function.name === 'web_search') {
+        // 自动分级：搜索方式优先级 机器人 > 设置页全局 > 默认 auto
+        const searchMode = bot.searchMode || cfg.searchMode || 'auto';
+        content = search.formatResults(await search.smartSearch(args.query, searchMode));
+      } else if (tc.function.name === 'web_fetch') {
+        const body = await search.webFetch(args.url);
+        content = body ? `【${args.url} 页面正文】\n${body}` : `无法读取该网页：${args.url}`;
+      } else {
+        content = '未知工具';
+      }
+      messages.push({ role: 'tool', tool_call_id: tc.id, content: String(content).slice(0, 8000) });
+    }
   }
-  const reply = (res && typeof res === 'object' && 'content' in res) ? res.content : res;
-  memory.recordUsage(botId, model.id, { usage: res.usage, promptTokens: res.promptTokens, ok: true });
+  if (!reply && res) reply = res.content || '';
   if (!reply) return '';
 
   // 解析 AI 自动记录的关键剧情（【记录】xxx）
@@ -228,6 +277,8 @@ function handleApi(req, res, u) {
     return send(200, {
       ok: true,
       port: cfg.port,
+      webSearch: cfg.webSearch,
+      searchMode: cfg.searchMode,
       bots: cfg.bots.map((b) => ({ ...b, runtime: app.bots.getStatus(b.id) })),
       models: cfg.models.map((m) => ({ ...m, hasKey: envMask[m.id] })),
     });
@@ -240,6 +291,8 @@ function handleApi(req, res, u) {
       if (body.bots) cfg.bots = body.bots;
       if (body.models) cfg.models = body.models;
       if (body.port) cfg.port = Number(body.port);
+      if (body.webSearch === true || body.webSearch === false) cfg.webSearch = body.webSearch;
+      if (['auto', 'light', 'browser'].includes(body.searchMode)) cfg.searchMode = body.searchMode;
       app.saveConfig(cfg);
       app.bots.sync(cfg);
       send(200, { ok: true });

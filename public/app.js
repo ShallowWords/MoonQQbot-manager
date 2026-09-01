@@ -150,6 +150,20 @@ function renderBotDetail(id) {
           <option value="false" ${b.sandbox === false ? 'selected' : ''}>正式</option>
         </select></div>
       </div>
+      <div class="grid-3" style="margin-top:12px">
+        <div class="field"><label>允许联网</label><select id="f-web">
+          <option value="" ${b.webSearch === undefined || b.webSearch === null ? 'selected' : ''}>跟随全局设置（当前：${webEnabled(b) ? '开启' : '关闭'}）</option>
+          <option value="true" ${b.webSearch === true ? 'selected' : ''}>允许</option>
+          <option value="false" ${b.webSearch === false ? 'selected' : ''}>禁止</option>
+        </select></div>
+        <div class="field"><label>搜索方式</label><select id="f-smode">
+          <option value="" ${b.searchMode ? '' : 'selected'}>跟随全局（${modeLabel(state.searchMode || 'auto')}）</option>
+          <option value="auto" ${b.searchMode === 'auto' ? 'selected' : ''}>自动（轻量优先）</option>
+          <option value="light" ${b.searchMode === 'light' ? 'selected' : ''}>仅轻量</option>
+          <option value="browser" ${b.searchMode === 'browser' ? 'selected' : ''}>仅浏览器</option>
+        </select></div>
+        <div class="field"><label>联网状态</label><div class="value">${webEnabled(b) ? '✅ 已开启' : '❌ 关闭'}</div></div>
+      </div>
     </div>
   ` : `
     <div class="card profile-card">
@@ -157,7 +171,7 @@ function renderBotDetail(id) {
         <div class="avatar">${avatarInner(b)}</div>
         <div class="profile-info">
           <div class="profile-name">${esc(b.name || b.id)} ${badge(b.runtime?.status)}</div>
-          <div class="profile-sub">${esc(b.id)} · AppID ${esc(b.appId || '-')} · ${b.sandbox !== false ? '沙箱' : '正式'}</div>
+          <div class="profile-sub">${esc(b.id)} · AppID ${esc(b.appId || '-')} · ${b.sandbox !== false ? '沙箱' : '正式'} · 联网 ${webEnabled(b) ? '开启' : '关闭'} · 搜索 ${modeLabel(b.searchMode || state.searchMode || 'auto')}</div>
         </div>
         <button class="ghost sm edit-btn" onclick="toggleBotEdit()" title="编辑">✎ 编辑</button>
       </div>
@@ -270,6 +284,7 @@ function renderSettings() {
       <button class="ghost sm" onclick="backFromSettings()">← 返回</button>
     </div>
     ${renderAppearance()}
+    ${renderGeneral()}
     <div class="settings-grid">
       <div class="card">
         <div class="card-title">全局设定（机器人勾选「采用全局设定」时生效）
@@ -626,6 +641,10 @@ async function saveBot(id) {
     modelId: $('#f-model').value,
     historyLimit: Number($('#f-history').value) || 10,
     sandbox: $('#f-sandbox').value === 'true',
+    // 允许联网：空 = 跟随全局；true/false 单独覆盖
+    webSearch: $('#f-web').value === 'true' ? true : $('#f-web').value === 'false' ? false : undefined,
+    // 搜索方式：空 = 跟随全局
+    searchMode: $('#f-smode').value || undefined,
   };
   const r = await api('/api/config', 'PUT', { bots });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
@@ -808,6 +827,12 @@ function renderModelDetail(id) {
         <div class="field"><label>最大 tokens（留空 = 不限制）</label><input id="m-tokens" type="number" value="${m.maxTokens > 0 ? m.maxTokens : ''}" placeholder="不限制"></div>
         <div class="field"><label>Key 状态</label><div class="value">${m.hasKey ? '✅ 已配置' : '❌ 未配置'}</div></div>
       </div>
+      <div class="frm-row" style="margin-top:12px">
+        <label class="frm" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="m-web" style="width:auto" ${m.webSearch ? 'checked' : ''}>
+          允许联网（模型通过 function calling 自主搜索 / 抓取网页，使用本地无头浏览器，免 API Key）
+        </label>
+      </div>
     </div>
     <div class="card">
       <div class="card-title">连通性测试</div>
@@ -830,6 +855,7 @@ async function saveModel(id) {
     apiKeyEnv: $('#m-env').value.trim(),
     temperature: Number($('#m-temp').value) || 0.7,
     maxTokens: Number($('#m-tokens').value) || 0,
+    webSearch: !!$('#m-web')?.checked,
   };
   const r = await api('/api/config', 'PUT', { models });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
@@ -886,6 +912,12 @@ function renderModelForm() {
         <div class="field"><label>温度</label><input id="m-temp" type="number" step="0.1" value="0.7"></div>
         <div class="field"><label>最大 tokens（留空 = 不限制）</label><input id="m-tokens" type="number" placeholder="不限制"></div>
       </div>
+      <div class="frm-row" style="margin-top:12px">
+        <label class="frm" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="m-web" style="width:auto">
+          允许联网（模型通过 function calling 自主搜索 / 抓取网页，使用本地无头浏览器，免 API Key）
+        </label>
+      </div>
       <p class="empty-hint" style="margin-top:10px">直接填 Key 最省事；或用 .env 变量名引用（如 SILICONFLOW_API_KEY），二选一即可。</p>
       <div style="margin-top:18px;display:flex;gap:8px">
         <button class="primary" onclick="createModel()">创建</button>
@@ -907,6 +939,7 @@ async function createModel() {
     apiKeyEnv: $('#m-env').value.trim(),
     temperature: Number($('#m-temp').value) || 0.7,
     maxTokens: Number($('#m-tokens').value) || 0,
+    webSearch: !!$('#m-web')?.checked,
   };
   if (!entry.id) return toast('请填写模型 ID', 'err');
   if ((state.models || []).some(m => m.id === entry.id)) return toast('该 ID 已存在', 'err');
@@ -978,6 +1011,68 @@ function pickAccent(hex) {
 function resetAccent() {
   applyAccent(DEFAULT_ACCENT);
   toast('已恢复默认主题色', 'ok');
+}
+
+// ---- 设置页「通用」：全局联网默认值（机器人可单独覆盖）+ 搜索分级方式 ----
+let _gMode = 'auto'; // 设置页当前选中的搜索方式
+
+function renderGeneral() {
+  _gMode = state.searchMode || 'auto';
+  const modes = [
+    { v: 'auto', n: '自动', d: '轻量优先，无结果时升级浏览器' },
+    { v: 'light', n: '仅轻量', d: 'HTTP 抓标题/摘要，不启动浏览器' },
+    { v: 'browser', n: '仅浏览器', d: '始终用无头浏览器搜索' },
+  ];
+  return `
+    <div class="card gen-card">
+      <div class="card-title">通用（联网搜索）
+        <span class="spacer"></span>
+        <button class="primary sm" onclick="saveGeneral()">保存</button>
+      </div>
+      <div class="gen-row">
+        <span class="gen-label">允许联网</span>
+        <label class="switch" title="${state.webSearch === true ? '点击关闭全局联网' : '点击开启全局联网'}">
+          <input type="checkbox" id="g-web" ${state.webSearch === true ? 'checked' : ''}>
+          <span class="slider"></span>
+        </label>
+        <span class="gen-hint">全局默认 ${state.webSearch === true ? '已开启' : '已关闭'}，各机器人可在「编辑」里单独覆盖</span>
+      </div>
+      <div class="gen-row" style="align-items:flex-start;margin-top:14px">
+        <span class="gen-label" style="padding-top:2px">搜索方式</span>
+        <div class="mode-cards" id="g-modes">
+          ${modes.map(m => `
+            <div class="mode-card ${_gMode === m.v ? 'active' : ''}" data-m="${m.v}" onclick="pickMode(this)">
+              <div class="mode-name">${m.n}</div>
+              <div class="mode-desc">${m.d}</div>
+            </div>`).join('')}
+        </div>
+      </div>
+      <p class="empty-hint" style="margin-top:10px">轻量方式只取标题/摘要，快且省资源；模型需要详细内容时会自动用浏览器抓取正文（web_fetch）。</p>
+    </div>`;
+}
+
+function pickMode(el) {
+  _gMode = el.dataset.m;
+  document.querySelectorAll('#g-modes .mode-card').forEach(c => c.classList.toggle('active', c === el));
+}
+
+async function saveGeneral() {
+  const r = await api('/api/config', 'PUT', { webSearch: !!$('#g-web').checked, searchMode: _gMode });
+  r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
+  if (r.ok) loadState();
+}
+
+// 计算机器人实际的联网开关状态（机器人 > 全局 > 模型）
+function webEnabled(b) {
+  const model = (state.models || []).find(m => m.id === b.modelId);
+  if (b.webSearch === true || b.webSearch === false) return b.webSearch;
+  if (state.webSearch === true || state.webSearch === false) return state.webSearch;
+  return model?.webSearch === true;
+}
+
+// 搜索方式显示名
+function modeLabel(mode) {
+  return mode === 'light' ? '仅轻量' : mode === 'browser' ? '仅浏览器' : '自动';
 }
 
 // ---------- 事件绑定 ----------

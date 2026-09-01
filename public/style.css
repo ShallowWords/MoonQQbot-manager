@@ -567,3 +567,25 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 .swatch:hover { transform: scale(1.15); }
 .swatch.cur { border-color: var(--text-dim); transform: scale(1.15); }
 #accent-color { width: 34px; height: 24px; padding: 0; border: 1px solid var(--line-2); border-radius: 6px; background: transparent; cursor: pointer; }
+
+/* 设置页「通用」：联网开关 + 搜索方式卡片 */
+.gen-card .card-title { margin-bottom: 6px; }
+.gen-row { display: flex; align-items: center; gap: 10px; }
+.gen-label { font-size: 12px; color: var(--text-dim); width: 64px; flex-shrink: 0; letter-spacing: .03em; }
+.gen-hint { font-size: 10px; color: var(--text-faint); line-height: 1.5; }
+.mode-cards { display: flex; gap: 8px; flex: 1; }
+.mode-card {
+  flex: 1;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  background: var(--input-bg);
+  transition: border-color .15s, background .15s;
+}
+.mode-card:hover { border-color: var(--accent); }
+.mode-card.active { border-color: var(--accent); background: var(--accent-soft); }
+.mode-card .mode-name { font-size: 12px; font-weight: 600; color: var(--text); }
+.mode-card.active .mode-name { color: color-mix(in srgb, var(--accent) 55%, #000); }
+.mode-card .mode-desc { font-size: 10px; color: var(--text-faint); margin-top: 3px; line-height: 1.5; }
+@media (max-width: 1100px) { .mode-cards { flex-direction: column; } }
