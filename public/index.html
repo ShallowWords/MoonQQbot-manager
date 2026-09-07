@@ -24,15 +24,14 @@
       <div class="side-list" id="bot-list"></div>
     </div>
 
-    <div class="side-group">
-      <div class="side-label">
-        <span>模型</span>
-        <button class="add-btn" id="btn-add-model" title="添加模型">＋</button>
-      </div>
-      <div class="side-list" id="model-list"></div>
+    <div class="side-btns">
+      <button class="settings-btn" onclick="openSettings()" title="设置">⚙ 设置</button>
+      <button class="settings-btn" onclick="openModels()" title="模型管理">▤ 模型</button>
     </div>
 
-    <button class="settings-btn" onclick="openSettings()" title="设置">⚙ 设置</button>
+    <div class="admin-launch">
+      <button class="settings-btn admin-entry" onclick="openAdminPanel()" title="面板管理员：配置模型 / 写提示词 / 总结内容">◈ 面板管理员</button>
+    </div>
 
     <div class="side-foot">
       <span class="dot" id="status-dot"></span>
