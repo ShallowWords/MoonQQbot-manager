@@ -25,10 +25,30 @@ QQ user sends message → bot gateway (qq-guild-bot over WebSocket)
 | Highlight moments | AI extracts the character's standout moments from memory files + recent chats, shown on the bot card |
 | Appearance | Accent color / light-dark theme / card background effects (pixel wave, light stream, matrix rain, meteor) |
 
+## Quick Deploy (from GitHub in 3 steps)
+
+**Windows**: double-click **`安装并启动.bat`** — it runs `npm install`, generates missing `config.json` / `.env` from the examples (never overwrites existing files), starts the panel and opens the browser.
+
+**macOS / Linux**:
+
+```bash
+npm install
+npm run setup     # one-shot init: check deps + copy missing example configs
+npm start
+```
+
+Then set your credentials either way:
+1. edit `config.json` (bot AppID, bound model) and `.env` (QQ Secret, model API keys); or
+2. open **http://127.0.0.1:4357** and add bots / models visually in the panel (saved automatically).
+
+> For web-search / browser features, Playwright prepares its browser engine on first use; for long-running processes use `pm2 start server.js --name qqbot-panel`.
+
 ## Structure
 
 ```
 server.js            Entry: HTTP panel + API + QQ bot scheduler
+setup.js             one-shot init (auto-copies missing example configs)
+安装并启动.bat        Windows one-click: install deps → init → run
 lib/
   bots.js            QQ bot lifecycle & connection
   memory.js          memory vault / sessions / global settings

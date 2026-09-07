@@ -25,10 +25,30 @@ QQ 用户发消息 → 机器人连接层（qq-guild-bot，WebSocket）
 | 精彩时刻 | AI 从记忆档案 + 最近对话中提炼该角色的高光片段，展示在机器人卡片上 |
 | 外观 | 主题色 / 明暗切换 / 卡片背景动效（像素海浪、流光、黑客雨、流星） |
 
+## 🚀 快速部署（GitHub 下载后 3 步上手）
+
+**Windows**：双击根目录 **`安装并启动.bat`** —— 自动 `npm install` → 用示例生成缺失的 `config.json` / `.env`（**不会覆盖已存在文件**）→ 启动面板并打开浏览器。
+
+**macOS / Linux**：
+
+```bash
+npm install
+npm run setup     # 一键初始化：检查依赖 + 自动生成缺失的示例配置
+npm start
+```
+
+然后二选一完成凭据：
+1. 编辑 `config.json`（机器人 AppID、绑定模型）与 `.env`（QQ Secret、模型 Key）；或
+2. 直接打开 **http://127.0.0.1:4357**，在面板「机器人 / 模型」页里可视化添加（保存即落盘）。
+
+> 需要联网搜索/浏览器能力时，Playwright 首次使用会自动准备浏览器内核；长期运行可用 `pm2 start server.js --name qqbot-panel` 守护。
+
 ## 目录结构
 
 ```
 server.js            入口：HTTP 面板 + API + QQ 机器人调度
+setup.js             一键初始化（自动生成缺失的示例配置）
+安装并启动.bat        Windows 一键：装依赖 → 初始化 → 启动
 lib/
   bots.js            QQ 机器人接入与生命周期
   memory.js          记忆库 / 会话 / 全局设定
