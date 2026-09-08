@@ -39,6 +39,27 @@ const app = {
   memory,
 };
 
+// 为机器人构造记忆维护用的轻量模型调用器：chatFn(messages, opts) → 模型回复文本
+// 自动解析机器人绑定的模型与 Key，并记录 token 用量；无可用模型时返回 null。
+function makeChatFn(botId) {
+  const cfg = app.getConfig();
+  const bot = cfg.bots.find((b) => b.id === botId);
+  const model = bot && (cfg.models.find((m) => m.id === bot.modelId) || cfg.models[0]);
+  if (!model) return null;
+  const apiKey = model.apiKey || app.env[model.apiKeyEnv];
+  if (!apiKey) return null;
+  return async (messages, opts = {}) => {
+    try {
+      const r = await models.chat(model, messages, { apiKey, maxTokens: 400, ...opts });
+      memory.recordUsage(botId, model.id, { usage: r.usage, promptTokens: r.promptTokens, ok: true });
+      return r.content;
+    } catch (err) {
+      memory.recordUsage(botId, model.id, { promptTokens: err.promptTokens, ok: false });
+      throw err;
+    }
+  };
+}
+
 // 核心对话逻辑：记忆 + 历史 + 模型调用 + 关键剧情自动记录
 // 返回模型回复（已剥离【记录】标记）；失败抛错。不负责写入会话记录。
 async function chatWithBot(botId, content) {
@@ -70,13 +91,28 @@ async function chatWithBot(botId, content) {
   else if (cfg.webSearch === true || cfg.webSearch === false) webEnabled = cfg.webSearch;
   else webEnabled = model.webSearch === true;
   const WEB_TOOLS = webEnabled ? search.TOOLS : undefined;
+  // 冷记忆工具：存在 tier3 文件时提供 recall_memory，AI 按需自行读取未注入的记忆
+  const coldFiles = memory.getColdFiles(botId);
+  const COLD_TOOLS = coldFiles.length ? [{
+    type: 'function',
+    function: {
+      name: 'recall_memory',
+      description: `读取机器人的冷记忆档案（未随对话注入的记忆文件）。可用档案：${coldFiles.map((f) => `${f.key}（${f.name}${f.desc ? '：' + f.desc : ''}）`).join('、')}。当对话涉及这些背景、或你需要补充相关记忆时主动调用。`,
+      parameters: {
+        type: 'object',
+        properties: { key: { type: 'string', description: '要读取的冷记忆文件名' } },
+        required: ['key'],
+      },
+    },
+  }] : [];
+  let tools = [...(WEB_TOOLS || []), ...COLD_TOOLS];
+  if (!tools.length) tools = undefined;
 
   // 调用模型（最多 3 轮工具循环）：模型可自主决定调用 web_search / web_fetch，
   // 服务端在本地执行搜索/抓正文后把结果回传，模型基于结果作答。
   // 用量记录：每轮成功用精确 usage，失败用本地估算兜底（失败请求同样计费）。
   let reply = '';
   let res = null;
-  let tools = WEB_TOOLS;
   const MAX_ROUNDS = 3;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     try {
@@ -113,6 +149,9 @@ async function chatWithBot(botId, content) {
       } else if (tc.function.name === 'web_fetch') {
         const body = await search.webFetch(args.url);
         content = body ? `【${args.url} 页面正文】\n${body}` : `无法读取该网页：${args.url}`;
+      } else if (tc.function.name === 'recall_memory') {
+        const text = memory.readColdFile(botId, String(args.key || ''));
+        content = text || `未找到可读取的冷记忆文件：${args.key}`;
       } else {
         content = '未知工具';
       }
@@ -122,14 +161,18 @@ async function chatWithBot(botId, content) {
   if (!reply && res) reply = res.content || '';
   if (!reply) return '';
 
-  // 解析 AI 自动记录的关键剧情（【记录】xxx）
+  // 解析 AI 自动记录的关键剧情（【记录】xxx）→ 结构化事件流
   const record = /【记录】([\s\S]+)$/.exec(reply.trim());
   if (record) {
     const event = record[1].trim();
-    if (event) memory.appendKeyEvent(botId, event);
+    if (event) memory.appendEvent(botId, { event, importance: 3, source: 'mark' });
     reply = reply.replace(/【记录】[\s\S]+$/, '').trim();
     console.log(`[bot:${botId}] 已自动记录关键剧情: ${event.slice(0, 60)}`);
   }
+
+  // 记忆维护（异步，不阻塞回复）：事件提炼 → 滚动压缩 → 核心卡蒸馏 → 摘要生成
+  const chatFn = makeChatFn(botId);
+  if (chatFn) memory.maintain(botId, chatFn, { user: content, assistant: reply }).catch(() => {});
   return reply;
 }
 
@@ -402,7 +445,7 @@ function buildAdminSystem(cfg, botId) {
   lines.push('- 读取：list_robots（机器人状态）、get_panel_state（模型/全局设置）、list_memory_files / read_memory_file（机器人记忆库）、read_sessions（最近会话）、search_memory（记忆库关键词搜索）、read_global_files / read_global_file（全局设定）；');
   lines.push('- 回顾自身：list_admin_sessions / read_admin_session（读取面板管理员的既往会话，跨对话保持记忆）；');
   lines.push('- 新增模型：create_model（用户确认服务信息后即可添加，立即生效、无需再确认）；');
-  lines.push('- 编辑建议：propose_memory_edit / propose_global_edit / propose_bot_config_edit —— 只生成「待确认写入」的操作，面板会提示用户点击确认后才真正写入；');
+  lines.push('- 编辑建议：propose_memory_edit / propose_memory_tier / propose_core_edit / propose_global_edit / propose_bot_config_edit —— 只生成「待确认写入」的操作，面板会提示用户点击确认后才真正写入；propose_memory_tier 用于建议记忆文件的层级（1=无条件强制注入 2=摘要索引 3=冷记忆）；propose_core_edit 用于建议人格核心卡（每轮注入的蒸馏人格）的新内容。');
   lines.push('- 联网：web_search / web_fetch（仅在面板开启联网时可用）。');
   lines.push('规则：需要机器人/模型/记忆/会话信息时，先调用对应读取工具获取真实内容，不要凭记忆猜测；判断问题、给建议都基于工具返回的原文。');
   lines.push('若当前模型端点不支持工具调用，系统会自动降级为纯文本模式；此时遵循以下【纯文本约定】输出结构（不要写成工具调用）：');
@@ -427,6 +470,12 @@ function buildAdminSystem(cfg, botId) {
   }
   lines.push(`【全局设置】允许联网：${cfg.webSearch === true ? '开' : '关'}；搜索方式：${cfg.searchMode || 'auto'}`);
   if (botId && cfg.bots.some((b) => b.id === botId)) {
+    const core = memory.readPersonaCore(botId);
+    if (core && core.core) {
+      lines.push('');
+      lines.push(`【机器人 ${botId} 当前人格核心卡（每轮注入对话的蒸馏人格，可用 propose_core_edit 修改）】`);
+      lines.push(memory.formatCore(core.core));
+    }
     const files = memory.getMemoryFiles(botId);
     if (files.length) {
       lines.push('');
@@ -662,6 +711,41 @@ function adminToolSchemas(webEnabled) {
     {
       type: 'function',
       function: {
+        name: 'propose_memory_tier',
+        description: '【写操作·需确认】建议调整机器人某个记忆文件的记忆层级，不落盘。用户确认后才会写入。层级说明：1=无条件强制注入（全文每轮进对话）；2=摘要索引（AI 蒸馏的摘要注入）；3=冷记忆（默认不注入，对话 AI 需要时经 recall_memory 读取）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            botId: { type: 'string', description: '机器人 ID' },
+            key: { type: 'string', description: '记忆文件名（不带 .md）' },
+            tier: { type: 'number', description: '目标层级：1 / 2 / 3' },
+          },
+          required: ['botId', 'key', 'tier'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'propose_core_edit',
+        description: '【写操作·需确认】给出机器人「人格核心卡」的新内容（AI 蒸馏的人格浓缩卡，每轮对话注入），不落盘。用户确认后才会写入。字段全部为字符串。',
+        parameters: {
+          type: 'object',
+          properties: {
+            botId: { type: 'string', description: '机器人 ID' },
+            identity: { type: 'string', description: '身份与基调（≤80字）' },
+            tone: { type: 'string', description: '说话风格（≤80字）' },
+            boundaries: { type: 'string', description: '不会做/禁忌/底线（≤60字）' },
+            relationship_state: { type: 'string', description: '当前与用户的关系阶段（≤60字）' },
+            evolved_notes: { type: 'string', description: '种子之外的性格演化备注（≤80字）' },
+          },
+          required: ['botId', 'identity'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'propose_global_edit',
         description: '【写操作·需确认】给出全局设定文件的新正文作为修改建议（不落盘）。用户确认后才会写入。',
         parameters: {
@@ -726,8 +810,12 @@ async function genBotMoments(b) {
   const out = await models.chat(model, [
     { role: 'system', content: sys },
     { role: 'user', content: `角色记忆档案：\n${(memText || '（空）').slice(0, 3500)}\n\n最近对话：\n${conv.slice(0, 4200)}\n\n请提炼最能代表这个角色的 3 个「精彩时刻」。` },
-  ], { apiKey, maxTokens: 900 });
-  const objs = extractJsonObjects(String(out?.content || ''));
+  ], { apiKey, maxTokens: 900, jsonMode: true });
+  // 解析：优先直解（jsonMode 保证单对象），失败降级括号配对（extractJsonObjects）
+  const raw = String(out?.content || '');
+  let objs = [];
+  try { const j = JSON.parse(raw.replace(/```(?:json)?/g, '').trim()); if (j && typeof j === 'object') objs = [j]; } catch {}
+  if (!objs.length) objs = extractJsonObjects(raw);
   const obj = objs.find(o => Array.isArray(o.moments)) || objs[0];
   const arr = (obj?.moments || []).map(m => ({
     title: String(m.title || '').trim().slice(0, 24),
@@ -774,8 +862,9 @@ async function runAdminTool(cfg, name, args = {}) {
   if (name === 'list_memory_files') {
     const b = mustBot(args.botId);
     const files = memory.getMemoryFiles(b.id);
+    const tierName = { 1: '强制注入', 2: '摘要索引', 3: '冷记忆' };
     const text = files.length
-      ? `【${b.name || b.id} 记忆库文件】\n` + files.map((f) => `- ${f.key}（${f.name}）${f.enabled ? '' : '[已禁用]'}：${f.desc || ''}`).join('\n')
+      ? `【${b.name || b.id} 记忆库文件】\n` + files.map((f) => `- ${f.key}（${f.name}）${f.enabled ? '' : '[已禁用]'}[层级:${tierName[f.tier] || '摘要索引'}]：${f.desc || ''}`).join('\n')
       : `【${b.id} 记忆库】\n（空）`;
     return { text, summary: `记忆库 ${files.length} 个文件`, pending: null };
   }
@@ -869,6 +958,26 @@ async function runAdminTool(cfg, name, args = {}) {
     const key = safeKey(args.key);
     const payload = { type: 'memory', payload: { botId: b.id, key, content: String(args.content ?? '') } };
     return { text: `已生成对 ${b.id}/${key}.md 的修改建议，等待用户在面板点击「确认写入」。`, summary: `待确认：${b.id}/${key}.md`, pending: payload };
+  }
+  if (name === 'propose_memory_tier') {
+    const b = mustBot(args.botId);
+    const key = safeKey(args.key);
+    const tier = Math.round(Number(args.tier));
+    if (![1, 2, 3].includes(tier)) throw new Error('层级必须是 1/2/3');
+    const names = { 1: '无条件强制注入', 2: '摘要索引', 3: '冷记忆' };
+    const payload = { type: 'memory_tier', payload: { botId: b.id, key, tier } };
+    return { text: `已生成将 ${b.id}/${key}.md 调整为「${names[tier]}」的建议，等待用户在面板点击「确认写入」。`, summary: `待确认：${key} → ${names[tier]}`, pending: payload };
+  }
+  if (name === 'propose_core_edit') {
+    const b = mustBot(args.botId);
+    const payload = { type: 'core', payload: { botId: b.id, core: {
+      identity: String(args.identity ?? ''),
+      tone: String(args.tone ?? ''),
+      boundaries: String(args.boundaries ?? ''),
+      relationship_state: String(args.relationship_state ?? ''),
+      evolved_notes: String(args.evolved_notes ?? ''),
+    } } };
+    return { text: `已生成 ${b.name || b.id} 人格核心卡的编辑建议，等待用户在面板点击「确认写入」。`, summary: `待确认：${b.id} 核心卡`, pending: payload };
   }
   if (name === 'propose_global_edit') {
     const key = safeKey(args.key);
@@ -1174,6 +1283,48 @@ function handleApi(req, res, p) {
     return;
   }
 
+  // POST /api/memory/:id/upload — 上传文本文件为记忆文件 { name, content, tier? }
+  m = /^\/api\/memory\/([\w\u4e00-\u9fa5-]+)\/upload$/.exec(p);
+  if (m && req.method === 'POST') {
+    readBody((body) => {
+      try {
+        // 文件名清洗：去扩展名 → 非法字符转下划线 → 截断；空名退化为时间戳
+        let key = String(body.name || '').trim().replace(/\.(md|txt|markdown)$/i, '')
+          .replace(/[^\w\u4e00-\u9fa5-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48);
+        if (!key) key = 'upload_' + Date.now();
+        const content = String(body.content ?? '');
+        if (!content.trim()) return send(400, { ok: false, err: '文件内容为空' });
+        memory.saveMemoryFile(m[1], key, content);
+        const tier = Number(body.tier);
+        if ([1, 2, 3].includes(tier)) memory.setFileTier(m[1], key, tier);
+        send(200, { ok: true, key });
+      } catch (err) { send(500, { ok: false, err: err.message }); }
+    });
+    return;
+  }
+
+  // PUT /api/memory/:id/files/order — 保存记忆文件重要性排序（面板拖动）{ keys: [...] }
+  // 注意：必须置于通配的 /files/:key 路由之前，否则 "order" 会被当成文件名
+  m = /^\/api\/memory\/([\w\u4e00-\u9fa5-]+)\/files\/order$/.exec(p);
+  if (m && req.method === 'PUT') {
+    readBody((body) => {
+      try { memory.setFileOrder(m[1], body.keys); send(200, { ok: true }); }
+      catch (err) { send(500, { ok: false, err: err.message }); }
+    });
+    return;
+  }
+
+  // PUT /api/memory/:id/files/:key/tier — 设置文件记忆层级 { tier: 1|2|3 }
+  // 注意：置于通配的 /files/:key 路由之前
+  m = /^\/api\/memory\/([\w\u4e00-\u9fa5-]+)\/files\/([\w\u4e00-\u9fa5-]+)\/tier$/.exec(p);
+  if (m && req.method === 'PUT') {
+    readBody((body) => {
+      try { memory.setFileTier(m[1], m[2], body.tier); send(200, { ok: true }); }
+      catch (err) { send(500, { ok: false, err: err.message }); }
+    });
+    return;
+  }
+
   // PUT /api/memory/:id/files/:key — 保存单个记忆文件
   m = /^\/api\/memory\/([\w\u4e00-\u9fa5-]+)\/files\/([\w\u4e00-\u9fa5-]+)$/.exec(p);
   if (m && req.method === 'PUT') {
@@ -1211,13 +1362,80 @@ function handleApi(req, res, p) {
     return;
   }
 
-  // POST /api/memory/:id/key-events — 手动追加关键剧情
+  // POST /api/memory/:id/key-events — 手动追加关键剧情（写入结构化事件流）
   m = /^\/api\/memory\/([\w\u4e00-\u9fa5-]+)\/key-events$/.exec(p);
   if (m && req.method === 'POST') {
     readBody((body) => {
       try { memory.appendKeyEvent(m[1], body.event || ''); send(200, { ok: true }); }
       catch (err) { send(500, { ok: false, err: err.message }); }
     });
+    return;
+  }
+
+  // GET /api/memory/:id/layers — 分层记忆状态（人格核心卡 / 事件流 / 各摘要）
+  m = /^\/api\/memory\/([\w\u4e00-\u9fa5-]+)\/layers$/.exec(p);
+  if (m && req.method === 'GET') return send(200, { ok: true, state: memory.getMemState(m[1]) });
+
+  // PUT /api/memory/:id/core — 手动编辑人格核心卡 { core: { identity, tone, boundaries, relationship_state, evolved_notes } }
+  m = /^\/api\/memory\/([\w\u4e00-\u9fa5-]+)\/core$/.exec(p);
+  if (m && req.method === 'PUT') {
+    readBody((body) => {
+      try { memory.writePersonaCore(m[1], body.core || body); send(200, { ok: true }); }
+      catch (err) { send(500, { ok: false, err: err.message }); }
+    });
+    return;
+  }
+
+  // POST /api/memory/:id/distill — 手动蒸馏：核心卡 + 剧情/内容摘要 + 事件压缩
+  m = /^\/api\/memory\/([\w\u4e00-\u9fa5-]+)\/distill$/.exec(p);
+  if (m && req.method === 'POST') {
+    const cfg = app.getConfig();
+    const bot = cfg.bots.find((x) => x.id === m[1]);
+    if (!bot) return send(404, { ok: false, err: '机器人不存在' });
+    const chatFn = makeChatFn(m[1]);
+    if (!chatFn) return send(400, { ok: false, err: '该机器人未绑定可用模型或未配置 API Key' });
+    (async () => {
+      const pick = (r) => (r.status === 'fulfilled' ? r.value : { ok: false, err: r.reason?.message || String(r.reason) });
+      const results = await Promise.allSettled([
+        memory.distillPersonaCore(m[1], chatFn),
+        memory.summarizeSource(m[1], 'plot', chatFn),
+        memory.summarizeSource(m[1], 'content', chatFn),
+        memory.compactEventsIfNeeded(m[1], chatFn),
+      ]);
+      send(200, {
+        ok: true,
+        results: {
+          core: pick(results[0]),
+          plot: pick(results[1]),
+          content: pick(results[2]),
+          events: pick(results[3]),
+        },
+      });
+    })().catch((err) => send(200, { ok: false, err: err.message }));
+    return;
+  }
+
+  // DELETE /api/memory/:id/events/:ts — 删除单条经历事件
+  m = /^\/api\/memory\/([\w\u4e00-\u9fa5-]+)\/events\/(\d{10,17})$/.exec(p);
+  if (m && req.method === 'DELETE') {
+    try { send(200, { ok: memory.deleteEvent(m[1], m[2]) }); }
+    catch (err) { send(500, { ok: false, err: err.message }); }
+    return;
+  }
+
+  // DELETE /api/memory/:id/events — 清空经历事件流（归档不受影响）
+  m = /^\/api\/memory\/([\w\u4e00-\u9fa5-]+)\/events$/.exec(p);
+  if (m && req.method === 'DELETE') {
+    try { memory.clearEvents(m[1]); send(200, { ok: true }); }
+    catch (err) { send(500, { ok: false, err: err.message }); }
+    return;
+  }
+
+  // DELETE /api/memory/:id/events-summary — 清空经历摘要（常驻注入的那份）
+  m = /^\/api\/memory\/([\w\u4e00-\u9fa5-]+)\/events-summary$/.exec(p);
+  if (m && req.method === 'DELETE') {
+    try { memory.clearEventsSummary(m[1]); send(200, { ok: true }); }
+    catch (err) { send(500, { ok: false, err: err.message }); }
     return;
   }
 
@@ -1352,23 +1570,30 @@ function handleApi(req, res, p) {
 ${listDesc}
 规则：
 1. 判断新信息归属哪个文件；可以拆分成多条分别归档到不同文件。
-2. 输出一个或多个 JSON 对象，每行一个（不要任何其他文字，不要 markdown 代码块），格式：{"file":"<上面某个key>","append":true,"content":"<简洁的条目内容>"}
+2. 只输出一个 JSON 对象（不要任何其他文字，不要 markdown 代码块），格式：{"items":[{"file":"<上面某个key>","append":true,"content":"<简洁的条目内容>"}]}
 3. content 中不要出现英文双引号，保持纯文本。
 4. append=true 表示在文件末尾追加一条。若新信息是对现有设定的整体替换（如角色状态彻底改变），可输出 append:false 且 content 为完整的替换内容（谨慎，勿覆盖无关内容）。`;
-        // 调用模型并记录用量：成功用精确 usage，失败用估算兜底
+        // 调用模型并记录用量：成功用精确 usage，失败用估算兜底（jsonMode：不支持 response_format 的端点会自动去参重试）
         let res, reply;
         try {
-          res = await models.chat(model, [{ role: 'system', content: sys }, { role: 'user', content: text }], { apiKey, maxTokens: 500 });
+          res = await models.chat(model, [{ role: 'system', content: sys }, { role: 'user', content: text }], { apiKey, maxTokens: 500, jsonMode: true });
           reply = res && typeof res === 'object' ? res.content : res;
           memory.recordUsage(bot.id, model.id, { usage: res.usage, promptTokens: res.promptTokens, ok: true });
         } catch (err) {
           memory.recordUsage(bot.id, model.id, { promptTokens: err.promptTokens, ok: false });
           throw err;
         }
-        const parsed = extractJsonObjects(reply);
+        // 解析：优先直解 {"items":[...]}；失败降级兼容旧版「每行一个 JSON 对象」
+        const raw = String(reply || '');
+        let items = [];
+        try {
+          const j = JSON.parse(raw.replace(/```(?:json)?/g, '').trim());
+          if (Array.isArray(j.items)) items = j.items;
+        } catch {}
+        if (!items.length) items = extractJsonObjects(raw).filter((o) => o && o.file && o.content);
         const enabledMap = new Map(files.map((f) => [f.key, f]));
         const results = [];
-        for (const obj of parsed) {
+        for (const obj of items) {
           if (!obj || !obj.file || !obj.content) continue;
           const target = enabledMap.get(obj.file);
           if (!target) continue;

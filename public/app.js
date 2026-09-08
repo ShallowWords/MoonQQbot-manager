@@ -217,16 +217,18 @@ function renderMoments(b) {
         <span class="spacer"></span>
         <button class="ghost sm" onclick="momentsGen('${b.id}')" title="根据最新记忆与对话重新提炼">↻ 重提炼</button>
       </div>
+      <div class="moments-grid">
       ${arr.map((m, i) => `
       <div class="moment">
-        <span class="moment-idx">${i + 1}</span>
-        <div class="moment-main">
-          <div class="moment-title">${esc(m.title || '无题时刻')}</div>
-          <div class="moment-sum">${esc(m.summary || '')}</div>
-          ${m.quote ? `<div class="moment-quote">“${esc(m.quote)}”</div>` : ''}
+        <div class="moment-top">
+          <span class="moment-idx">${i + 1}</span>
+          <button class="moment-del" onclick="momentDel('${b.id}', ${i})" title="删除该条">✕</button>
         </div>
-        <button class="moment-del" onclick="momentDel('${b.id}', ${i})" title="删除该条">✕</button>
+        <div class="moment-title">${esc(m.title || '无题时刻')}</div>
+        <div class="moment-sum">${esc(m.summary || '')}</div>
+        ${m.quote ? `<div class="moment-quote">“${esc(m.quote)}”</div>` : ''}
       </div>`).join('')}
+      </div>
     </div>`;
 }
 
@@ -310,35 +312,43 @@ function renderBotDetail(id) {
     </div>
   ` : `
     <div class="card profile-card">
-      <div class="profile-head">
-        <div class="avatar">${avatarInner(b)}</div>
-        <div class="profile-info">
-          <div class="profile-name-line">
-            <span class="profile-name">${esc(b.name || b.id)}</span>
-            <span class="bot-tag">正在操作</span>
-          </div>
-          <div class="profile-sub">${badge(b.runtime?.status)}<span class="profile-id">${esc(b.id)} · AppID ${esc(b.appId || '-')}</span></div>
-        </div>
-        <button class="ghost sm" onclick="restartBot('${b.id}')">↻ 重连</button>
-        <button class="ghost sm ghost-del" onclick="delBot('${b.id}')">删除</button>
-        <button class="ghost sm edit-btn" onclick="toggleBotEdit()" title="编辑">✎ 编辑</button>
-      </div>
-      <div class="profile-grid">
-        <div class="pg-item"><label>绑定模型</label><div>${esc(modelName)}</div></div>
-        <div class="pg-item"><label>历史记忆</label><div>${b.historyLimit || 10} 条</div></div>
-        <div class="pg-item"><label>Key 引用</label><div>${esc(b.appSecret ? (b.appSecret.length > 18 ? b.appSecret.slice(0, 18) + '…' : b.appSecret) : '-')}</div></div>
-        <div class="pg-item"><label>记忆文件数</label><div id="pg-filecount">…</div></div>
-      </div>
-      <div class="profile-status-bar">
-        <span class="status-chip ${b.sandbox === false ? 'ok' : 'warn'}"><span class="chip-dot ${b.sandbox === false ? 'on' : 'warn'}"></span>${b.sandbox === false ? '正式发布' : '沙箱测试'}</span>
-        ${webEnabled(b)
-          ? '<span class="status-chip ok"><span class="chip-dot on"></span>🌐 联网</span>'
-          : '<span class="status-chip"><span class="chip-dot off"></span>🌐 未联网</span>'}
-        <span class="status-chip"><span class="chip-icon">⚡</span>搜索 ${modeLabel(b.searchMode || state.searchMode || 'auto')}</span>
-        <span class="status-chip ${(b.runtime?.status || '') === '已连接' ? 'ok' : 'err'}"><span class="chip-dot ${(b.runtime?.status || '') === '已连接' ? 'on' : 'off'}"></span>${esc(b.runtime?.status || '未启动')}</span>
-      </div>
-      ${renderMoments(b)}
       <canvas class="pixel-wave" data-accent="" data-effect="${esc(cardEffectId())}"></canvas>
+      <div class="profile-wrap">
+        <div class="profile-side">
+          <div class="avatar avatar-lg">${avatarInner(b)}</div>
+        </div>
+        <div class="profile-main">
+          <div class="profile-head">
+            <div class="profile-info">
+              <div class="profile-name-line">
+                <span class="profile-name">${esc(b.name || b.id)}</span>
+                <span class="bot-tag">正在操作</span>
+              </div>
+              <div class="profile-sub">${badge(b.runtime?.status)}<span class="profile-id">${esc(b.id)} · AppID ${esc(b.appId || '-')}</span></div>
+            </div>
+            <div class="profile-actions">
+              <button class="ghost sm" onclick="restartBot('${b.id}')">↻ 重连</button>
+              <button class="ghost sm ghost-del" onclick="delBot('${b.id}')">删除</button>
+              <button class="ghost sm edit-btn" onclick="toggleBotEdit()" title="编辑">✎ 编辑</button>
+            </div>
+          </div>
+          <div class="profile-status-bar">
+            <span class="status-chip ${b.sandbox === false ? 'ok' : 'warn'}"><span class="chip-dot ${b.sandbox === false ? 'on' : 'warn'}"></span>${b.sandbox === false ? '正式发布' : '沙箱测试'}</span>
+            ${webEnabled(b)
+              ? '<span class="status-chip ok"><span class="chip-dot on"></span>🌐 联网</span>'
+              : '<span class="status-chip"><span class="chip-dot off"></span>🌐 未联网</span>'}
+            <span class="status-chip"><span class="chip-icon">⚡</span>搜索 ${modeLabel(b.searchMode || state.searchMode || 'auto')}</span>
+            <span class="status-chip ${(b.runtime?.status || '') === '已连接' ? 'ok' : 'err'}"><span class="chip-dot ${(b.runtime?.status || '') === '已连接' ? 'on' : 'off'}"></span>${esc(b.runtime?.status || '未启动')}</span>
+          </div>
+          <div class="profile-grid">
+            <div class="pg-item"><label>🧠 绑定模型</label><div>${esc(modelName)}</div></div>
+            <div class="pg-item"><label>🕘 历史记忆</label><div>${b.historyLimit || 10} 条</div></div>
+            <div class="pg-item"><label>🔑 Key 引用</label><div>${esc(b.appSecret ? (b.appSecret.length > 18 ? b.appSecret.slice(0, 18) + '…' : b.appSecret) : '-')}</div></div>
+            <div class="pg-item"><label>🗂 记忆文件</label><div id="pg-filecount">…</div></div>
+          </div>
+          ${renderMoments(b)}
+        </div>
+      </div>
     </div>
   `;
 
@@ -347,8 +357,10 @@ function renderBotDetail(id) {
 
     <div class="cards-2">
       <div class="card mem-card">
-        <div class="card-title">记忆库（memory/${esc(b.id)}/）
+        <div class="card-title">记忆管理（memory/${esc(b.id)}/）
           <span class="spacer"></span>
+          <button class="ghost sm" onclick="distillNow('${b.id}')" title="蒸馏人格核心卡 + 生成剧情/内容摘要 + 压缩事件流">↻ 立即蒸馏</button>
+          <button class="ghost sm" onclick="openUploadModal('${b.id}')">⬆ 上传</button>
           <button class="ghost sm" onclick="openFolder('${b.id}')">打开文件夹</button>
           <button class="ghost sm" onclick="newMemoryFile('${b.id}')">＋ 新增文件</button>
         </div>
@@ -359,7 +371,29 @@ function renderBotDetail(id) {
           </label>
           <span class="mem-global-text">采用全局设定<span class="mem-global-sub">勾选后，对话时先读取「⚙ 设置」中的全局用户设定与全局提示词，再读取下方记忆文件；取消勾选则仅使用下方记忆库文件</span></span>
         </div>
-        <div class="mem-files" id="mem-files"></div>
+        <div id="mem-layers" class="mem-lay-bar"><div class="empty-hint">分层状态加载中…</div></div>
+        <div class="mem-mgr">
+          <div class="mem-tiers">
+            <div class="mem-tier" ondragover="tierDragOver(event)" ondragleave="tierDragLeave(event)" ondrop="tierDrop(event,'${b.id}',1)">
+              <div class="mem-tier-head t1">无条件强制注入</div>
+              <div class="mem-tier-sub">全文每轮注入 · 绝不裁剪</div>
+              <div class="mem-tier-body" data-tier="1"></div>
+            </div>
+            <div class="mem-tier" ondragover="tierDragOver(event)" ondragleave="tierDragLeave(event)" ondrop="tierDrop(event,'${b.id}',2)">
+              <div class="mem-tier-head t2">摘要索引</div>
+              <div class="mem-tier-sub">蒸馏为分段摘要注入</div>
+              <div class="mem-tier-body" data-tier="2"></div>
+            </div>
+            <div class="mem-tier" ondragover="tierDragOver(event)" ondragleave="tierDragLeave(event)" ondrop="tierDrop(event,'${b.id}',3)">
+              <div class="mem-tier-head t3">冷记忆</div>
+              <div class="mem-tier-sub">AI 经 recall_memory 按需读取</div>
+              <div class="mem-tier-body" data-tier="3"></div>
+            </div>
+          </div>
+          <div class="mem-files" id="mem-files"></div>
+        </div>
+        <div class="mem-sec-title">AI 蒸馏内容<span class="mem-sec-sub">由 AI 从对话与记忆档案自动总结蒸馏 · 随对话持续更新</span></div>
+        <div id="mem-distill" class="mem-distill"><div class="empty-hint">加载中…</div></div>
         <div class="ingest-box">
           <textarea id="f-ingest" rows="1" placeholder="概述新剧情 / 内容，AI 自动归类写入对应记忆文件…"></textarea>
           <button class="primary sm" onclick="ingestMemory('${b.id}')">✉ AI 归档</button>
@@ -380,6 +414,7 @@ function renderBotDetail(id) {
         </div>
       </div>
     </div>
+
 
     <div class="card">
       <div class="card-title">主动发消息（单聊需填写对方的 openid）</div>
@@ -405,6 +440,7 @@ function renderBotDetail(id) {
   `;
 
   loadMemoryFiles(b.id);
+  loadMemLayers(b.id);
   loadSessions(b.id);
   refreshHeartNext(b.id);
 
@@ -889,25 +925,327 @@ async function loadMemoryFiles(id) {
   const r = await api(`/api/memory/${id}/files`);
   const files = r.files || [];
   renderMemFiles(id, files);
+  renderTiers(id, files);
   const pc = $('#pg-filecount');
   if (pc) pc.textContent = files.length + ' 个';
 }
+
+// 记忆层级标签
+const TIER_LABEL = { 1: '强制', 2: '摘要', 3: '冷' };
 
 function renderMemFiles(id, files) {
   const el = $('#mem-files');
   if (!el) return;
   if (!files.length) { el.innerHTML = '<div class="empty-hint">暂无记忆文件，点击右上角 ＋ 新增</div>'; return; }
   el.innerHTML = files.map((f, i) => `
-    <div class="mem-file ${f.enabled ? '' : 'disabled'}" onclick="openMemFile('${id}','${f.key}')" title="点击概览内容 / 编辑备注" style="animation-delay:${Math.min(i * 45, 300)}ms">
+    <div class="mem-file ${f.enabled ? '' : 'disabled'}" data-key="${esc(f.key)}" draggable="true"
+         onclick="openMemFile('${id}','${f.key}')" title="点击概览内容 / 编辑备注；拖动 ⠿ 调整重要性" style="animation-delay:${Math.min(i * 45, 300)}ms"
+         ondragstart="memDragStart(event,'${id}','${esc(f.key)}')" ondragover="memDragOver(event)"
+         ondrop="memDrop(event,'${id}')" ondragend="memDragEnd(event)">
+      <span class="mf-handle" title="拖动调整重要性（越靠前越重要）">⠿</span>
       <label class="switch" onclick="event.stopPropagation()" title="${f.enabled ? '点击禁用' : '点击启用'}">
         <input type="checkbox" ${f.enabled ? 'checked' : ''} onchange="toggleFile('${id}','${f.key}',this.checked)">
         <span class="slider"></span>
       </label>
       <span class="mf-name">${esc(f.name)}</span>
+      <span class="mf-tier t${f.tier}" title="记忆层级：拖动卡片到左侧层级桶，或点击卡片在弹窗中修改">${TIER_LABEL[f.tier] || '摘要'}</span>
       <span class="mf-desc">${esc(f.desc) || '无备注'}</span>
       <span class="mf-state">${f.enabled ? '启用' : '已禁用'}</span>
       <button class="ghost sm mf-del" onclick="event.stopPropagation();delMemoryFile('${id}','${f.key}')" title="删除文件">✕</button>
     </div>`).join('');
+}
+
+// ---- 记忆文件拖动排序（重要性分级：越靠前越重要） ----
+let _memDragKey = null;
+
+function memDragStart(ev, id, key) {
+  // 开关/删除按钮等交互元素不触发拖拽；其余整卡可拖
+  if (ev.target.closest && ev.target.closest('.switch, .mf-del, button, input')) { ev.preventDefault(); return; }
+  _memDragKey = key;
+  ev.dataTransfer.effectAllowed = 'move';
+  try { ev.dataTransfer.setData('text/plain', key); } catch {}
+  ev.currentTarget.classList.add('dragging');
+}
+
+function memDragOver(ev) {
+  if (!_memDragKey) return;
+  ev.preventDefault();
+  ev.dataTransfer.dropEffect = 'move';
+  document.querySelectorAll('#mem-files .mem-file').forEach(el => el.classList.remove('drag-over'));
+  if (ev.currentTarget && ev.currentTarget.classList) ev.currentTarget.classList.add('drag-over');
+}
+
+function memDrop(ev, id) {
+  ev.preventDefault();
+  document.querySelectorAll('#mem-files .mem-file').forEach(el => el.classList.remove('drag-over'));
+  document.querySelectorAll('.mem-tier').forEach(el => el.classList.remove('drag-over'));
+  const targetKey = ev.currentTarget && ev.currentTarget.dataset ? ev.currentTarget.dataset.key : null;
+  const dragKey = _memDragKey || (() => { try { return ev.dataTransfer.getData('text/plain'); } catch { return ''; } })();
+  _memDragKey = null;
+  if (!dragKey || !targetKey || dragKey === targetKey) return;
+  // 以面板当前行顺序为基准：移除被拖项，插入到目标行之前
+  const rows = [...document.querySelectorAll('#mem-files .mem-file')].map(el => el.dataset.key);
+  const arr = rows.filter(k => k !== dragKey);
+  const idx = arr.indexOf(targetKey);
+  if (idx < 0) return;
+  arr.splice(idx, 0, dragKey);
+  saveMemOrder(id, arr);
+}
+
+function memDragEnd(ev) {
+  _memDragKey = null;
+  document.querySelectorAll('#mem-files .mem-file').forEach(el => el.classList.remove('dragging', 'drag-over'));
+  document.querySelectorAll('.mem-tier').forEach(el => el.classList.remove('drag-over'));
+}
+
+async function saveMemOrder(id, keys) {
+  const r = await api(`/api/memory/${id}/files/order`, 'PUT', { keys });
+  if (r.ok) { toast('已更新记忆文件重要性排序', 'ok'); loadMemoryFiles(id); }
+  else toast(r.err || '排序保存失败', 'err');
+}
+
+// ---- 记忆层级（拖动文件卡片到左侧层级桶） ----
+function chipDragStart(ev, id, key) {
+  _memDragKey = key;
+  ev.dataTransfer.effectAllowed = 'move';
+  try { ev.dataTransfer.setData('text/plain', key); } catch {}
+}
+
+function renderTiers(id, files) {
+  for (const t of [1, 2, 3]) {
+    const body = document.querySelector(`#mem-tiers .mem-tier-body[data-tier="${t}"]`);
+    if (!body) continue;
+    const inTier = files.filter(f => (f.tier || 2) === t);
+    body.innerHTML = inTier.length
+      ? inTier.map(f => `<span class="tier-chip t${t}" draggable="true" ondragstart="chipDragStart(event,'${id}','${esc(f.key)}')" title="${esc(f.name)} · 拖到其他层级可调整">${esc(f.key)}</span>`).join('')
+      : '<span class="tier-empty">拖入文件</span>';
+  }
+}
+
+function tierDragOver(ev) {
+  if (!_memDragKey) return;
+  ev.preventDefault();
+  ev.dataTransfer.dropEffect = 'move';
+  if (ev.currentTarget && ev.currentTarget.classList) ev.currentTarget.classList.add('drag-over');
+}
+
+function tierDragLeave(ev) {
+  if (ev.currentTarget && ev.currentTarget.classList) ev.currentTarget.classList.remove('drag-over');
+}
+
+async function tierDrop(ev, id, tier) {
+  ev.preventDefault();
+  if (ev.currentTarget && ev.currentTarget.classList) ev.currentTarget.classList.remove('drag-over');
+  const key = _memDragKey || (() => { try { return ev.dataTransfer.getData('text/plain'); } catch { return ''; } })();
+  _memDragKey = null;
+  if (!key) return;
+  await saveTier(id, key, tier);
+}
+
+async function saveTier(id, key, tier) {
+  const r = await api(`/api/memory/${id}/files/${key}/tier`, 'PUT', { tier });
+  if (r.ok) { toast(`「${key}」→ ${ { 1: '无条件强制注入', 2: '摘要索引', 3: '冷记忆' }[tier] }`, 'ok'); loadMemoryFiles(id); }
+  else toast(r.err || '层级设置失败', 'err');
+}
+
+// ---- 分层记忆（人格核心卡 + 经历事件流 + 摘要） ----
+function fmtShortTs(ts) {
+  const d = new Date(ts);
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+// 分层状态：顶部单行 + 底部「AI 蒸馏内容」展示
+let _layState = null;
+
+async function loadMemLayers(id) {
+  const el = $('#mem-layers');
+  if (!el) return;
+  const r = await api(`/api/memory/${id}/layers`);
+  if (!r.ok) { el.innerHTML = `<span class="lay-dim">分层状态加载失败：${esc(r.err || '')}</span>`; return; }
+  _layState = r.state;
+  renderMemLayers(id);
+  renderMemDistill(id);
+}
+
+function layStatText(s) {
+  const coreStat = s.core ? (s.coreFresh ? '核心卡 ✓' : '核心卡 ⚠待蒸馏') : (s.seedEmpty ? '核心卡（种子为空）' : '核心卡 未蒸馏');
+  const sumStat = ['plot', 'content'].map((k) => { const x = s.summaries[k]; return x ? (x.fresh ? '✓' : '待更新') : '—'; }).join('/');
+  return `${coreStat} · 事件 ${s.eventCount} 条 · 摘要 ${sumStat}`;
+}
+
+function renderMemLayers(id) {
+  const el = $('#mem-layers');
+  if (!el || !_layState) return;
+  el.innerHTML = `<span class="lay-line">${layStatText(_layState)}</span>`;
+}
+
+// 底部「AI 蒸馏内容」：展示 AI 自动生成的核心卡与各类摘要（带管理入口）
+function renderMemDistill(id) {
+  const el = $('#mem-distill');
+  if (!el || !_layState) return;
+  const s = _layState;
+  const badge = (state) => state === true ? '<span class="distill-ok">✓ 与源同步</span>'
+    : state === false ? '<span class="distill-warn">⚠ 待更新</span>' : '';
+  const coreBody = s.core
+    ? `身份：${esc(s.core.core.identity || '-')}<br>语气：${esc(s.core.core.tone || '-')}<br>边界：${esc(s.core.core.boundaries || '-')}<br>关系现状：${esc(s.core.core.relationship_state || '-')}<br>演化备注：${esc(s.core.core.evolved_notes || '-')}`
+    : `<span class="lay-dim">${s.seedEmpty ? '人格种子为空，无法蒸馏' : '尚未蒸馏——对话后自动生成，或点右上「↻ 立即蒸馏」'}</span>`;
+  const secBody = (k) => {
+    const x = s.summaries[k];
+    return x && x.sections.length
+      ? x.sections.map((t) => '· ' + esc(t)).join('<br>')
+      : `<span class="lay-dim">尚未生成（蒸馏时自动生成）</span>`;
+  };
+  const evBody = s.summary
+    ? esc(s.summary).replace(/\n/g, '<br>')
+    : `<span class="lay-dim">暂无（经历事件超过 30 条后自动压缩生成）</span>`;
+  const evPreview = s.eventCount
+    ? s.events.slice(-3).reverse().map((e) => `· [${fmtShortTs(e.ts)}] ${esc(e.event)}`).join('<br>')
+    : `<span class="lay-dim">暂无事件（对话中自动提炼，或使用「AI 归档」记录剧情）</span>`;
+  el.innerHTML = `
+    <div class="distill-block span2"><div class="distill-label">人格核心卡 ${badge(s.core ? s.coreFresh : null)}${s.core && s.core.manual ? '<span class="distill-ok">手动编辑</span>' : ''}<span class="spacer"></span><button class="ghost sm" onclick="openCoreEditModal('${id}')">✎ 编辑</button></div><div class="distill-body">${coreBody}</div></div>
+    <div class="distill-block"><div class="distill-label">剧情摘要 ${badge(s.summaries.plot ? s.summaries.plot.fresh : null)}<span class="spacer"></span><button class="ghost sm" onclick="distillNow('${id}')">↻ 重新生成</button></div><div class="distill-body">${secBody('plot')}</div></div>
+    <div class="distill-block"><div class="distill-label">内容摘要 ${badge(s.summaries.content ? s.summaries.content.fresh : null)}<span class="spacer"></span><button class="ghost sm" onclick="distillNow('${id}')">↻ 重新生成</button></div><div class="distill-body">${secBody('content')}</div></div>
+    <div class="distill-block"><div class="distill-label">经历事件流<span class="distill-count">${s.eventCount} 条 · 归档 ${s.archiveCount}</span><span class="spacer"></span><button class="ghost sm" onclick="openEventManage('${id}')">⚙ 管理</button></div><div class="distill-body">${evPreview}</div></div>
+    <div class="distill-block"><div class="distill-label">经历摘要（旧事件压缩）<span class="spacer"></span>${s.summary ? `<button class="ghost sm" onclick="clearEventsSummary('${id}')">清空</button>` : ''}</div><div class="distill-body">${evBody}</div></div>`;
+}
+
+// ---- 系统归纳内容管理（事件 / 摘要） ----
+async function clearEventsSummary(id) {
+  if (!(await uiConfirm({ title: '清空经历摘要', message: '确定清空经历摘要？\n清空后下次事件压缩时会重新生成。', okText: '清空' }))) return;
+  const r = await api(`/api/memory/${id}/events-summary`, 'DELETE');
+  if (r.ok) { toast('已清空', 'ok'); loadMemLayers(id); } else toast(r.err || '操作失败', 'err');
+}
+
+function openEventManage(id) {
+  api(`/api/memory/${id}/layers`).then((r) => {
+    if (!r.ok) return toast(r.err || '加载失败', 'err');
+    const s = r.state;
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'ev-manage-modal';
+    const rows = (s.events || []).slice().reverse().map((e) => `
+      <div class="ev-row">
+        <span class="ev-ts">[${fmtShortTs(e.ts)}] P${e.importance} ${e.source === 'mark' ? '·记录' : e.source === 'auto' ? '·自动' : '·手动'}</span>
+        <span class="ev-text">${esc(e.event)}</span>
+        <button class="ghost sm" onclick="delEvent('${id}',${e.ts},this)">✕</button>
+      </div>`).join('');
+    overlay.innerHTML = `
+      <div class="modal-card ev-manage-modal">
+        <div class="modal-head"><span>🧾 经历事件管理（${s.eventCount} 条）</span><span class="spacer"></span>
+          <button class="danger sm" onclick="clearAllEvents('${id}')">清空全部</button>
+          <button class="ghost sm" onclick="document.getElementById('ev-manage-modal').remove()">✕ 关闭</button></div>
+        <div class="modal-body">${rows || '<div class="empty-hint">暂无事件</div>'}</div>
+      </div>`;
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+  });
+}
+
+async function delEvent(id, ts, btn) {
+  const r = await api(`/api/memory/${id}/events/${ts}`, 'DELETE');
+  if (r.ok) { const row = btn.closest('.ev-row'); if (row) row.remove(); toast('已删除', 'ok'); loadMemLayers(id); } else toast(r.err || '删除失败', 'err');
+}
+
+async function clearAllEvents(id) {
+  if (!(await uiConfirm({ title: '清空经历事件', message: '确定清空全部经历事件？\n已归档的旧事件与经历摘要不受影响。', okText: '清空' }))) return;
+  const r = await api(`/api/memory/${id}/events`, 'DELETE');
+  if (r.ok) { const m = document.getElementById('ev-manage-modal'); if (m) m.remove(); toast('已清空', 'ok'); loadMemLayers(id); } else toast(r.err || '操作失败', 'err');
+}
+
+// ---- 上传文件为记忆（用户自定层级） ----
+function openUploadModal(id) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'upload-modal';
+  overlay.innerHTML = `
+    <div class="modal-card upload-modal">
+      <div class="modal-head"><span>⬆ 上传记忆文件</span><span class="spacer"></span>
+        <button class="ghost sm" onclick="document.getElementById('upload-modal').remove()">✕ 关闭</button></div>
+      <div class="modal-body">
+        <label class="frm">选择文件（.md / .txt，可多选，内容为纯文本）</label>
+        <input id="upload-input" type="file" multiple accept=".md,.txt,.markdown">
+        <label class="frm" style="margin-top:12px">上传后的记忆层级（之后可拖到其他层级调整）</label>
+        <div class="tier-pick">
+          <label><input type="radio" name="up-tier" value="1"> 强制注入</label>
+          <label><input type="radio" name="up-tier" value="2" checked> 摘要索引</label>
+          <label><input type="radio" name="up-tier" value="3"> 冷记忆</label>
+        </div>
+        <div id="upload-progress" class="lay-dim" style="margin-top:10px"></div>
+        <button class="primary" style="margin-top:10px" onclick="doUpload('${id}')">开始上传</button>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+async function doUpload(id) {
+  const input = $('#upload-input');
+  const files = input && input.files ? [...input.files] : [];
+  if (!files.length) return toast('请先选择文件', 'err');
+  const tier = Number((document.querySelector('input[name="up-tier"]:checked') || {}).value) || 2;
+  const prog = $('#upload-progress');
+  let okN = 0;
+  for (const f of files) {
+    prog.textContent = `正在上传：${f.name} …`;
+    try {
+      const content = await f.text();
+      const r = await api(`/api/memory/${id}/upload`, 'POST', { name: f.name, content, tier });
+      if (r.ok) okN++; else toast(`${f.name} 上传失败：${r.err}`, 'err');
+    } catch (e) { toast(`${f.name} 读取失败：${e.message}`, 'err'); }
+  }
+  prog.textContent = `完成：成功 ${okN}/${files.length} 个`;
+  toast(`已上传 ${okN}/${files.length} 个文件（层级：${ { 1: '强制注入', 2: '摘要索引', 3: '冷记忆' }[tier] }）`, okN ? 'ok' : 'err');
+  loadMemoryFiles(id);
+}
+
+async function distillNow(id) {
+  toast('蒸馏中…（核心卡 + 剧情/内容摘要 + 事件压缩）');
+  const r = await api(`/api/memory/${id}/distill`, 'POST', {});
+  if (!r.ok) return toast(r.err || '蒸馏失败', 'err');
+  const res = r.results || {};
+  const line = (name, x) => `${name}: ${x && x.ok ? '✓' : '✗ ' + ((x && x.err) || '失败')}`;
+  const okCount = ['core', 'plot', 'content'].filter((k) => res[k] && res[k].ok).length;
+  toast([line('核心卡', res.core), line('剧情摘要', res.plot), line('内容摘要', res.content)].join('　'), okCount ? 'ok' : 'err');
+  loadMemLayers(id);
+}
+
+// ---- 人格核心卡手动编辑（用户） ----
+const CORE_FIELDS = [
+  ['identity', '身份与基调', '例：古风侍女，温柔粘人，以主人为尊'],
+  ['tone', '语气', '例：说话轻柔含蓄，常用古风措辞'],
+  ['boundaries', '边界', '例：不做的事 / 禁忌 / 底线'],
+  ['relationship_state', '关系现状', '例：初识 / 熟络 / 深度依恋'],
+  ['evolved_notes', '演化备注', '种子之外从经历中沉淀的性格变化'],
+];
+
+function openCoreEditModal(id) {
+  const s = _layState;
+  const c = (s && s.core && s.core.core) || {};
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'core-edit-modal';
+  overlay.innerHTML = `
+    <div class="modal-card core-edit-modal">
+      <div class="modal-head"><span>✎ 编辑人格核心卡</span><span class="spacer"></span>
+        <button class="ghost sm" onclick="document.getElementById('core-edit-modal').remove()">✕ 关闭</button></div>
+      <div class="modal-body">
+        <p class="empty-hint" style="margin:0 0 10px">核心卡每轮对话注入。手动编辑后不会被周期性自动蒸馏覆盖；但修改「人格/特征」种子会触发重新蒸馏。</p>
+        ${CORE_FIELDS.map(([k, label, ph]) => `
+          <label class="frm">${label}</label>
+          <textarea id="core-${k}" rows="2" placeholder="${esc(ph)}">${esc((c[k] || '').replace(/^-$/, ''))}</textarea>`).join('')}
+        <button class="primary" style="margin-top:12px" onclick="saveCore('${id}')">保存核心卡</button>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+async function saveCore(id) {
+  const core = {};
+  for (const [k] of CORE_FIELDS) { const el = $(`#core-${k}`); core[k] = el ? el.value.trim() : ''; }
+  const r = await api(`/api/memory/${id}/core`, 'PUT', { core });
+  if (r.ok) { toast('核心卡已保存（手动编辑版，不被周期蒸馏覆盖）', 'ok'); const m = document.getElementById('core-edit-modal'); if (m) m.remove(); loadMemLayers(id); }
+  else toast(r.err || '保存失败', 'err');
 }
 
 // ---- 记忆文件概览弹窗：预览内容 + 编辑备注 ----
@@ -923,10 +1261,19 @@ async function openMemFile(id, key) {
       <div class="modal-head">
         <span>📄 ${esc(f.name)}（${esc(f.key)}.md）</span>
         <span class="spacer"></span>
+        <button class="primary sm" onclick="saveTierModal('${id}','${key}')">保存层级</button>
         <button class="primary sm" onclick="saveFileDesc('${id}','${key}')">保存备注</button>
         <button class="ghost sm" onclick="closeMemFileModal()">✕ 关闭</button>
       </div>
       <div class="modal-body memfile-body">
+        <div class="mf-desc-edit">
+          <label class="frm">记忆层级（决定注入方式；也可在列表中拖动卡片到左侧层级桶）</label>
+          <div class="tier-pick">
+            <label><input type="radio" name="mf-tier" value="1" ${f.tier === 1 ? 'checked' : ''}> 强制注入</label>
+            <label><input type="radio" name="mf-tier" value="2" ${f.tier === 2 ? 'checked' : ''}> 摘要索引</label>
+            <label><input type="radio" name="mf-tier" value="3" ${f.tier === 3 ? 'checked' : ''}> 冷记忆</label>
+          </div>
+        </div>
         <div class="mf-desc-edit">
           <label class="frm">备注（可自定义说明，会显示在记忆库列表）</label>
           <input id="mf-desc" type="text" value="${esc(f.desc)}" placeholder="这段记忆的用途说明…" maxlength="80">
@@ -937,6 +1284,14 @@ async function openMemFile(id, key) {
     </div>`;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeMemFileModal(); });
   document.body.appendChild(overlay);
+}
+
+async function saveTierModal(id, key) {
+  const tier = Number((document.querySelector('#memfile-modal input[name="mf-tier"]:checked') || {}).value);
+  if (![1, 2, 3].includes(tier)) return toast('请选择层级', 'err');
+  const r = await api(`/api/memory/${id}/files/${key}/tier`, 'PUT', { tier });
+  if (r.ok) { toast(`「${key}」→ ${ { 1: '强制注入', 2: '摘要索引', 3: '冷记忆' }[tier] }`, 'ok'); closeMemFileModal(); loadMemoryFiles(id); }
+  else toast(r.err || '层级设置失败', 'err');
 }
 
 function closeMemFileModal() {
@@ -1794,8 +2149,11 @@ function extractEdit(reply) {
 // 渲染编辑确认操作条（人工确认后才写入）
 function renderEditBar(ed) {
   const p = ed.payload || {};
+  const tierNames = { 1: '无条件强制注入', 2: '摘要索引', 3: '冷记忆' };
   let label = '';
   if (ed.type === 'memory') label = `管理员建议修改记忆：${p.botId} 的「${p.key}」`;
+  else if (ed.type === 'memory_tier') label = `管理员建议调整记忆层级：${p.botId} 的「${p.key}」→ ${tierNames[p.tier] || p.tier}`;
+  else if (ed.type === 'core') label = `管理员建议修改人格核心卡：${p.botId}`;
   else if (ed.type === 'global') label = `管理员建议修改全局文件：「${p.key}」`;
   else label = `管理员建议更新机器人配置：${p.id || ''}`;
   return `<div class="admin-msg ai"><div class="admin-bubble admin-action admin-write">
@@ -1823,9 +2181,9 @@ function previewEdit(btn) {
   let ed = null;
   try { ed = JSON.parse(btn.dataset.json); } catch { return toast('解析失败', 'err'); }
   const p = ed.payload || {};
-  const content = ed.type === 'bot' ? JSON.stringify(p, null, 2) : (p.content || '');
+  const content = (ed.type === 'bot' || ed.type === 'core') ? JSON.stringify(p, null, 2) : (p.content || '');
   const title = ed.type === 'memory' ? `预览：${p.botId} 记忆「${p.key}」`
-    : ed.type === 'global' ? `预览：全局「${p.key}」` : `预览：机器人「${p.id}」配置`;
+    : ed.type === 'global' ? `预览：全局「${p.key}」` : ed.type === 'core' ? `预览：${p.botId} 人格核心卡` : `预览：机器人「${p.id}」配置`;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'edit-preview';
@@ -1844,8 +2202,11 @@ async function confirmEdit(btn) {
   let ed = null;
   try { ed = JSON.parse(btn.dataset.json); } catch { return toast('解析失败', 'err'); }
   const p = ed.payload || {};
+  const tierNames = { 1: '无条件强制注入', 2: '摘要索引', 3: '冷记忆' };
   let desc = '';
   if (ed.type === 'memory') desc = `将覆盖 ${p.botId} 记忆文件「${p.key}」的内容`;
+  else if (ed.type === 'memory_tier') desc = `将把 ${p.botId} 的「${p.key}」层级调整为「${tierNames[p.tier] || p.tier}」`;
+  else if (ed.type === 'core') desc = `将覆盖 ${p.botId} 的人格核心卡`;
   else if (ed.type === 'global') desc = `将覆盖全局文件「${p.key}」的内容`;
   else desc = `将更新机器人「${p.id}」的配置`;
   if (!(await uiConfirm({ title: '确认应用更改', message: `${desc}，\n确认应用？`, okText: '确认应用' }))) return;
@@ -1853,6 +2214,12 @@ async function confirmEdit(btn) {
   if (ed.type === 'memory') {
     if (!p.botId || !p.key) return toast('缺少 botId 或 key', 'err');
     r = await api(`/api/memory/${p.botId}/files/${p.key}`, 'PUT', { content: p.content || '' });
+  } else if (ed.type === 'memory_tier') {
+    if (!p.botId || !p.key) return toast('缺少 botId 或 key', 'err');
+    r = await api(`/api/memory/${p.botId}/files/${p.key}/tier`, 'PUT', { tier: p.tier });
+  } else if (ed.type === 'core') {
+    if (!p.botId || !p.core) return toast('缺少 botId 或核心卡内容', 'err');
+    r = await api(`/api/memory/${p.botId}/core`, 'PUT', { core: p.core });
   } else if (ed.type === 'global') {
     if (!p.key) return toast('缺少 key', 'err');
     r = await api(`/api/global/files/${p.key}`, 'PUT', { content: p.content || '' });
@@ -1874,7 +2241,7 @@ async function confirmEdit(btn) {
       btn.textContent = '已写入 ✓';
     }
     await loadState();
-    if (ed.type === 'memory' && view.type === 'bot' && view.id === p.botId) loadMemoryFiles(p.botId);
+    if ((ed.type === 'memory' || ed.type === 'memory_tier' || ed.type === 'core') && view.type === 'bot' && view.id === p.botId) loadMemoryFiles(p.botId);
   } else {
     toast(r.err || '写入失败', 'err');
   }
@@ -2397,6 +2764,10 @@ const CARD_EFFECTS = [
   { id: 'shine', name: '✨ 流光' },
   { id: 'matrix', name: '🖥 黑客雨' },
   { id: 'meteor', name: '☄ 流星' },
+  { id: 'aurora', name: '🌠 极光' },
+  { id: 'firefly', name: '🌌 萤火' },
+  { id: 'snow', name: '❄ 飘雪' },
+  { id: 'bubbles', name: '🫧 气泡' },
   { id: 'none', name: '◽ 纯净' },
 ];
 function cardEffectId() {
@@ -2511,8 +2882,8 @@ function drawCardEffect(cv) {
   const t = (cv.__pwT || 0) / 1000;
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (ef === 'none') { g.clearRect(0, 0, w, h); return; }
-  if (ef === 'shine' || ef === 'meteor') {
-    // 每帧轻微擦除上一帧 → 流光 / 流星拖尾
+  if (ef === 'shine' || ef === 'meteor' || ef === 'firefly') {
+    // 每帧轻微擦除上一帧 → 流光 / 流星 / 萤火拖尾
     g.save();
     g.globalCompositeOperation = 'destination-out';
     g.fillStyle = 'rgba(0,0,0,' + (0.05 * dim) + ')';
@@ -2524,6 +2895,10 @@ function drawCardEffect(cv) {
   if (ef === 'matrix') drawMatrixFx(g, w, h, accent, dark, t);
   else if (ef === 'shine') drawShineFx(g, w, h, accent, dark, t);
   else if (ef === 'meteor') drawMeteorFx(g, w, h, accent, dark, t);
+  else if (ef === 'snow') drawSnowFx(g, w, h, accent, dark, t);
+  else if (ef === 'bubbles') drawBubblesFx(g, w, h, accent, dark, t);
+  else if (ef === 'firefly') drawFireflyFx(g, w, h, accent, dark, t);
+  else if (ef === 'aurora') drawAuroraFx(g, w, h, accent, dark, t);
 }
 
 // 确定性伪随机（同参同值）
@@ -2628,6 +3003,92 @@ function drawMeteorFx(g, w, h, accent, dark, t) {
     g.fill();
   }
 }
+// ---- 飘雪：大小不一的雪晶飘落，横向正弦摇摆（清屏重绘） ----
+function drawSnowFx(g, w, h, accent, dark, t) {
+  const n = Math.max(14, Math.floor(w / 34));
+  for (let i = 0; i < n; i++) {
+    const seed = i * 13.7;
+    const speed = 14 + fxHash(seed) * 26;                              // 下落速度 px/s
+    const x0 = fxHash(seed + 1) * w;
+    const sway = 10 + fxHash(seed + 2) * 18;                           // 横向摆幅
+    const r = 1.2 + fxHash(seed + 3) * 2.4;
+    const y = ((t * speed) + fxHash(seed + 4) * (h + 40)) % (h + 40) - 20;
+    const x = x0 + Math.sin(t * (0.6 + fxHash(seed + 5) * 0.7) + i) * sway;
+    const a = (dark ? 0.6 : 0.45) * (0.45 + fxHash(seed + 6) * 0.55);
+    g.fillStyle = dark ? `rgba(255,255,255,${a})` : hexA(accent, a * 0.75);
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+  }
+}
+
+// ---- 气泡：自底部上浮的透亮气泡，边升边摇（清屏重绘） ----
+function drawBubblesFx(g, w, h, accent, dark, t) {
+  const n = Math.max(10, Math.floor(w / 46));
+  for (let i = 0; i < n; i++) {
+    const seed = i * 17.3;
+    const speed = 18 + fxHash(seed) * 30;
+    const x0 = fxHash(seed + 1) * w;
+    const r = 3 + fxHash(seed + 2) * 7;
+    const y = h + 20 - ((t * speed + fxHash(seed + 3) * (h + 60)) % (h + 60));
+    const x = x0 + Math.sin(t * (0.5 + fxHash(seed + 4) * 0.8) + i * 2) * (8 + fxHash(seed + 5) * 14);
+    const a = (dark ? 0.42 : 0.3) * (0.4 + fxHash(seed + 6) * 0.6);
+    g.strokeStyle = hexA(accent, a);
+    g.lineWidth = 1.2;
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.stroke();
+    g.fillStyle = hexA(accent, a * 0.22);
+    g.fill();
+    g.fillStyle = dark ? `rgba(255,255,255,${a * 0.6})` : hexA(accent, a * 0.55);
+    g.beginPath(); g.arc(x - r * 0.35, y - r * 0.35, Math.max(0.8, r * 0.22), 0, Math.PI * 2); g.fill();
+  }
+}
+
+// ---- 萤火：缓缓游荡的光点，呼吸式明灭并带辉光拖尾（衰减擦除） ----
+function drawFireflyFx(g, w, h, accent, dark, t) {
+  const n = Math.max(8, Math.floor(w / 70));
+  for (let i = 0; i < n; i++) {
+    const seed = i * 23.1;
+    const px = w * (0.5 + 0.42 * Math.sin(t * (0.18 + fxHash(seed) * 0.3) + fxHash(seed + 1) * 6.28));
+    const py = h * (0.5 + 0.4 * Math.sin(t * (0.13 + fxHash(seed + 2) * 0.25) + fxHash(seed + 3) * 6.28));
+    const pulse = 0.5 + 0.5 * Math.sin(t * (1.2 + fxHash(seed + 4) * 1.6) + i);
+    const r = 1.4 + fxHash(seed + 5) * 1.8;
+    const a = (dark ? 0.85 : 0.55) * (0.3 + pulse * 0.7);
+    const grad = g.createRadialGradient(px, py, 0, px, py, r * 6);
+    grad.addColorStop(0, hexA(accent, a));
+    grad.addColorStop(1, hexA(accent, 0));
+    g.fillStyle = grad;
+    g.beginPath(); g.arc(px, py, r * 6, 0, Math.PI * 2); g.fill();
+    g.fillStyle = dark ? `rgba(255,240,200,${a})` : hexA(accent, a);
+    g.beginPath(); g.arc(px, py, r, 0, Math.PI * 2); g.fill();
+  }
+}
+
+// ---- 极光：多层丝带状光幕横向流动（暗色下叠加发光） ----
+function drawAuroraFx(g, w, h, accent, dark, t) {
+  if (dark) g.globalCompositeOperation = 'lighter';
+  for (let b = 0; b < 3; b++) {
+    const amp = h * (0.10 + fxHash(b * 9.1) * 0.08);
+    const yBase = h * (0.3 + fxHash(b * 5.7) * 0.4);
+    const speed = 0.25 + b * 0.12;
+    const grad = g.createLinearGradient(0, 0, w, 0);
+    const a1 = (dark ? 0.16 : 0.10) * (1 - b * 0.22);
+    grad.addColorStop(0, hexA(accent, 0));
+    grad.addColorStop(0.5, hexA(accent, a1));
+    grad.addColorStop(1, hexA(accent, 0));
+    g.fillStyle = grad;
+    g.beginPath();
+    g.moveTo(0, h);
+    for (let x = 0; x <= w + 14; x += 14) {
+      const y = yBase
+        + Math.sin((x / w) * Math.PI * (1.6 + b * 0.7) + t * speed * 2 + b * 0.9) * amp
+        + Math.sin((x / w) * Math.PI * 4.2 - t * speed * 1.3) * amp * 0.4;
+      g.lineTo(x, y);
+    }
+    g.lineTo(w, h);
+    g.closePath();
+    g.fill();
+  }
+  g.globalCompositeOperation = 'source-over';
+}
+
 function drawPixelWave(cv) {
   const rect = cv.getBoundingClientRect();
   if (rect.width < 10 || rect.height < 10) return;
