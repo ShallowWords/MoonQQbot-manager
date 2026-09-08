@@ -309,6 +309,15 @@ function renderBotDetail(id) {
         </select></div>
         <div class="field"><label>联网状态</label><div class="value">${webEnabled(b) ? '✅ 已开启' : '❌ 关闭'}</div></div>
       </div>
+      <div class="grid-3" style="margin-top:12px">
+        <div class="field"><label>流式回复（打字机效果，仅单聊）</label><select id="f-stream">
+          <option value="" ${b.streamReply === undefined || b.streamReply === null ? 'selected' : ''}>跟随全局设置（当前：${state.streamReply === true ? '开启' : '关闭'}）</option>
+          <option value="true" ${b.streamReply === true ? 'selected' : ''}>开启</option>
+          <option value="false" ${b.streamReply === false ? 'selected' : ''}>关闭</option>
+        </select></div>
+        <div class="field"><label>Markdown 回复</label><div class="value">自动启用，失败回退文本</div></div>
+        <div class="field"><label>流式可用性</label><div class="value">${b.streamReply === false ? '已关闭' : '需要官方 Markdown/流式权限'}</div></div>
+      </div>
     </div>
   ` : `
     <div class="card profile-card">
@@ -339,6 +348,7 @@ function renderBotDetail(id) {
               : '<span class="status-chip"><span class="chip-dot off"></span>🌐 未联网</span>'}
             <span class="status-chip"><span class="chip-icon">⚡</span>搜索 ${modeLabel(b.searchMode || state.searchMode || 'auto')}</span>
             <span class="status-chip ${(b.runtime?.status || '') === '已连接' ? 'ok' : 'err'}"><span class="chip-dot ${(b.runtime?.status || '') === '已连接' ? 'on' : 'off'}"></span>${esc(b.runtime?.status || '未启动')}</span>
+        ${(() => { const on = b.streamReply === true || (b.streamReply === undefined && state.streamReply === true); return on ? '<span class="status-chip ok"><span class="chip-icon">⌨</span>流式</span>' : ''; })()}
           </div>
           <div class="profile-grid">
             <div class="pg-item"><label>🧠 绑定模型</label><div>${esc(modelName)}</div></div>
@@ -2277,37 +2287,164 @@ async function applyAdminModel(btn) {
 }
 
 // ---- 轻量 Markdown 渲染（先转义防 XSS，再转换） ----
-function md(s) {
-  let h = esc(s);
-  // 先提取代码块并占位，保护内部内容不被标题/列表/段落规则二次加工
-  const codeBlocks = [];
-  h = h.replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) => {
-    codeBlocks.push(`<pre><code>${code.trim()}</code></pre>`);
-    return `\u0000${codeBlocks.length - 1}\u0000`;
+// LaTeX 数学轻渲染：覆盖聊天常见构造（零依赖，不追求排版完美）
+// 支持：^ 上标 / _ 下标 / \frac 分式 / \sqrt 根号 / 常用命令（·×÷±≤≥≠≈∞π 等希腊字母）
+function mathToHtml(src, display) {
+  let t = String(src ?? '');
+  // 命令映射（含常见希腊字母与运算符）
+  const cmds = {
+    '\\cdot': '·', '\\times': '×', '\\div': '÷', '\\pm': '±', '\\mp': '∓',
+    '\\leq': '≤', '\\le': '≤', '\\geq': '≥', '\\ge': '≥', '\\neq': '≠', '\\ne': '≠',
+    '\\approx': '≈', '\\equiv': '≡', '\\infty': '∞', '\\propto': '∝',
+    '\\rightarrow': '→', '\\to': '→', '\\leftarrow': '←', '\\Rightarrow': '⇒',
+    '\\sum': '∑', '\\prod': '∏', '\\int': '∫', '\\partial': '∂',
+    '\\lim': 'lim', '\\log': 'log', '\\ln': 'ln', '\\lg': 'lg',
+    '\\sin': 'sin', '\\cos': 'cos', '\\tan': 'tan', '\\max': 'max', '\\min': 'min',
+    '\\alpha': 'α', '\\beta': 'β', '\\gamma': 'γ', '\\delta': 'δ', '\\epsilon': 'ε',
+    '\\theta': 'θ', '\\lambda': 'λ', '\\mu': 'μ', '\\pi': 'π', '\\rho': 'ρ',
+    '\\sigma': 'σ', '\\phi': 'φ', '\\omega': 'ω', '\\Delta': 'Δ', '\\Sigma': 'Σ',
+    '\\Omega': 'Ω', '\\in': '∈', '\\notin': '∉', '\\subset': '⊂', '\\cup': '∪', '\\cap': '∩',
+    '\\left': '', '\\right': '', '\\,': ' ', '\\;': '  ', '\\!': '', '\\quad': '  ',
+  };
+  t = t.replace(/\\[a-zA-Z]+|\\[,;!]/g, (m) => {
+    if (m === '\\frac' || m === '\\dfrac' || m === '\\tfrac' || m === '\\sqrt') return m; // 留给分式/根号处理
+    return m in cmds ? cmds[m] : m.replace('\\', '');
   });
-  // 标题
-  h = h.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  h = h.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  h = h.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-  // 粗体 / 斜体
-  h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  h = h.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-  // 行内代码
-  h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
-  // 链接
-  h = h.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  // 引用
-  h = h.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
-  // 无序 / 有序列表（成组包 <ul>/<ol>）
-  const listRe = /(?:^- .+\n?)+/gm;
-  h = h.replace(listRe, (m) => '<ul>' + m.split('\n').map(l => `<li>${l.replace(/^- /, '')}</li>`).join('') + '</ul>');
-  const olRe = /(?:^\d+\. .+\n?)+/gm;
-  h = h.replace(olRe, (m) => '<ol>' + m.split('\n').map(l => `<li>${l.replace(/^\d+\. /, '')}</li>`).join('') + '</ol>');
-  // 其余行 → 段落（跳过占位符行，负向断言内用非捕获组，保证 (.+) 是 $1）
-  h = h.replace(/^(?!<\/?(?:h[1-3]|pre|ul|ol|li|blockquote|p)|\u0000|$)(.+)$/gm, '<p>$1</p>');
-  // 还原代码块
-  h = h.replace(/\u0000(\d+)\u0000/g, (m, i) => codeBlocks[Number(i)] ?? m);
-  // 压缩标签间的空白换行
+
+  // 递归处理分式 / 根号（由内向外，直到无嵌套花括号参数）
+  const render = (s) => {
+    let prev = null;
+    while (prev !== s) {
+      prev = s;
+      s = s.replace(/\\d?frac\{([^{}]*)\}\{([^{}]*)\}/g, (_m, a, b) =>
+        `<span class="mfrac"><span class="mnum">${render(a)}</span><span class="mden">${render(b)}</span></span>`);
+      s = s.replace(/\\sqrt\{([^{}]*)\}/g, (_m, a) => `<span class="msqrt">√<span class="mover">${render(a)}</span></span>`);
+    }
+    return s;
+  };
+  t = render(t);
+
+  // 上标 / 下标（^{} _{} 或单字符）
+  t = t.replace(/\^\{([^{}]+)\}/g, '<sup>$1</sup>');
+  t = t.replace(/\^([0-9a-zA-Z])/g, '<sup>$1</sup>');
+  t = t.replace(/_\{([^{}]+)\}/g, '<sub>$1</sub>');
+  t = t.replace(/_([0-9a-zA-Z])/g, '<sub>$1</sub>');
+  // 残余花括号去除
+  t = t.replace(/[{}]/g, '');
+  return display ? `<div class="md-math">${t}</div>` : `<span class="md-math-inline">${t}</span>`;
+}
+
+// Markdown 渲染（面板会话/气泡）：先整体转义防注入，再按行解析块级语法
+// 支持：围栏代码块、1-6 级标题、分隔线、多行引用、无序/有序列表（含二级缩进）、表格、
+//       数学公式 $...$ / $$...$$（轻量 LaTeX 渲染）、
+//       行内：粗体/斜体/删除线/行内代码/链接/图片/裸 URL 自动识别
+function md(s) {
+  const lines = esc(s).replace(/\r\n?/g, '\n').split('\n');
+  const codeBlocks = [];
+  const mathSegs = [];
+  const out = [];
+
+  // 行内语法（输入已转义）
+  const inline = (t) => {
+    let h = t;
+    // 数学公式：$$ 显示式 → $ 行内式（占位保护，结尾统一还原）
+    h = h.replace(/\$\$([^$]+?)\$\$/g, (m, l) => { mathSegs.push(mathToHtml(l.trim(), true)); return `\u0001${mathSegs.length - 1}\u0001`; });
+    h = h.replace(/\$([^$\n]+?)\$/g, (m, l) => { mathSegs.push(mathToHtml(l.trim(), false)); return `\u0001${mathSegs.length - 1}\u0001`; });
+    h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+    h = h.replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>');
+    h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    h = h.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    h = h.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+    h = h.replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g, '<img class="md-img" src="$2" alt="$1">');
+    h = h.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    h = h.replace(/(^|[\s(（"'])((?:https?:\/\/)[^\s<>()（）"']+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+    return h;
+  };
+  const isTableSep = (l) => /\|/.test(l) && /-/.test(l) && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(l);
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // 围栏代码块（整体保护，内部不做行内转换）
+    if (/^```/.test(line)) {
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^```\s*$/.test(lines[i])) { buf.push(lines[i]); i++; }
+      i++; // 跳过收尾 ```
+      codeBlocks.push(`<pre class="md-pre"><code>${buf.join('\n')}</code></pre>`);
+      out.push(`\u0000${codeBlocks.length - 1}\u0000`);
+      continue;
+    }
+
+    if (!line.trim()) { out.push(''); i++; continue; }
+
+    // 标题 1-6 级
+    const hm = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (hm) { const l = hm[1].length; out.push(`<h${l}>${inline(hm[2])}</h${l}>`); i++; continue; }
+
+    // 分隔线
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { out.push('<hr class="md-hr">'); i++; continue; }
+
+    // 表格：当前行含 | 且下一行是分隔行
+    if (line.includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      const cells = (l) => l.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((c) => inline(c.trim()));
+      const head = cells(line);
+      i += 2;
+      const body = [];
+      while (i < lines.length && lines[i].trim() && lines[i].includes('|')) { body.push(cells(lines[i])); i++; }
+      out.push('<table class="md-table"><thead><tr>' + head.map((c) => `<th>${c}</th>`).join('') + '</tr></thead><tbody>'
+        + body.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('') + '</tbody></table>');
+      continue;
+    }
+
+    // 数学显示块：以 $$ 开头（未在本行成对 → 向后收集到含 $$ 的行）
+    if (/^\s*\$\$/.test(line) && (line.match(/\$\$/g) || []).length < 2) {
+      const buf = [line];
+      i++;
+      while (i < lines.length && !/\$\$/.test(lines[i]) && buf.length < 30) { buf.push(lines[i]); i++; }
+      if (i < lines.length) { buf.push(lines[i]); i++; }
+      mathSegs.push(mathToHtml(buf.join(' ').replace(/\$\$/g, ' ').trim(), true));
+      out.push(`\u0001${mathSegs.length - 1}\u0001`);
+      continue;
+    }
+
+    // 引用（连续 &gt; 行合并为一个块）
+    if (/^\s*&gt;\s?/.test(line)) {
+      const buf = [];
+      while (i < lines.length && /^\s*&gt;\s?/.test(lines[i])) { buf.push(lines[i].replace(/^\s*&gt;\s?/, '')); i++; }
+      out.push(`<blockquote class="md-quote">${buf.map(inline).join('<br>')}</blockquote>`);
+      continue;
+    }
+
+    // 列表（无序 -/*/+，有序 1.；两格缩进视为二级；连续同类行归入同一列表）
+    if (/^(\s*)(?:[-*+]|\d+\.)\s+/.test(line)) {
+      const ordered = /^\s*\d+\.\s+/.test(line);
+      const itemRe = ordered ? /^(\s*)\d+\.\s+/ : /^(\s*)[-*+]\s+/;
+      const items = [];
+      while (i < lines.length && itemRe.test(lines[i])) {
+        const indent = (/^(\s*)/.exec(lines[i])[1] || '').length >= 2;
+        items.push({ indent, text: inline(lines[i].replace(itemRe, '')) });
+        i++;
+      }
+      const tag = ordered ? 'ol' : 'ul';
+      out.push(`<${tag} class="md-list">` + items.map((it) => `<li${it.indent ? ' class="md-li2"' : ''}>${it.text}</li>`).join('') + `</${tag}>`);
+      continue;
+    }
+
+    // 段落：连续普通行合并，遇块级语法/空行结束
+    const isBlockStart = (l, idx) => /^(#{1,6}\s|```)/.test(l) || /^\s*&gt;\s?/.test(l)
+      || /^(\s*)(?:[-*+]|\d+\.)\s+/.test(l) || /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(l)
+      || (l.includes('|') && idx + 1 < lines.length && isTableSep(lines[idx + 1]));
+    const buf = [inline(line)];
+    i++;
+    while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i], i)) { buf.push(inline(lines[i])); i++; }
+    out.push(`<p>${buf.join('<br>')}</p>`);
+  }
+
+  let h = out.join('\n');
+  h = h.replace(/\u0000(\d+)\u0000/g, (m, idx) => codeBlocks[Number(idx)] ?? m);
+  h = h.replace(/\u0001(\d+)\u0001/g, (m, idx) => mathSegs[Number(idx)] ?? m);
   h = h.replace(/>\s+</g, '><');
   return h;
 }
@@ -2329,6 +2466,8 @@ async function saveBot(id) {
     webSearch: $('#f-web').value === 'true' ? true : $('#f-web').value === 'false' ? false : undefined,
     // 搜索方式：空 = 跟随全局
     searchMode: $('#f-smode').value || undefined,
+    // 流式回复：空 = 跟随全局；true/false 单独覆盖
+    streamReply: $('#f-stream') ? ($('#f-stream').value === 'true' ? true : $('#f-stream').value === 'false' ? false : undefined) : undefined,
   };
   const r = await api('/api/config', 'PUT', { bots });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
@@ -2816,6 +2955,14 @@ function renderGeneral() {
             </div>`).join('')}
         </div>
       </div>
+      <div class="gen-row" style="margin-top:12px">
+        <span class="gen-label">流式回复</span>
+        <label class="switch" title="${state.streamReply === true ? '点击关闭全局流式回复' : '点击开启全局流式回复'}">
+          <input type="checkbox" id="g-stream" ${state.streamReply === true ? 'checked' : ''}>
+          <span class="slider"></span>
+        </label>
+        <span class="gen-hint">开启后单聊使用官方流式消息（打字机效果 + Markdown），需机器人具备相应权限；失败自动回退普通文本</span>
+      </div>
       <p class="empty-hint" style="margin-top:10px">轻量方式只取标题/摘要，快且省资源；模型需要详细内容时会自动用浏览器抓取正文（web_fetch）。</p>
     </div>`;
 }
@@ -2826,7 +2973,7 @@ function pickMode(el) {
 }
 
 async function saveGeneral() {
-  const r = await api('/api/config', 'PUT', { webSearch: !!$('#g-web').checked, searchMode: _gMode });
+  const r = await api('/api/config', 'PUT', { webSearch: !!$('#g-web').checked, searchMode: _gMode, streamReply: !!$('#g-stream').checked });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
   if (r.ok) loadState();
 }

@@ -61,8 +61,9 @@ function makeChatFn(botId) {
 }
 
 // 核心对话逻辑：记忆 + 历史 + 模型调用 + 关键剧情自动记录
+// opts.onDelta(累积全文)：提供时走流式（chatStreamCollect），每轮增量回调（跨轮累积拼接）
 // 返回模型回复（已剥离【记录】标记）；失败抛错。不负责写入会话记录。
-async function chatWithBot(botId, content) {
+async function chatWithBot(botId, content, opts = {}) {
   const cfg = app.getConfig();
   const bot = cfg.bots.find((b) => b.id === botId);
   if (!bot) throw new Error('机器人不存在');
@@ -113,16 +114,32 @@ async function chatWithBot(botId, content) {
   // 用量记录：每轮成功用精确 usage，失败用本地估算兜底（失败请求同样计费）。
   let reply = '';
   let res = null;
+  let streamedAll = '';   // 跨轮累积的已流式文本（replace 前缀约束）
   const MAX_ROUNDS = 3;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     try {
-      res = await models.chat(model, messages, { apiKey, tools });
+      if (opts.onDelta) {
+        // 流式：SSE 收集，onDelta(本轮累积 + 之前各轮) 保持 replace 前缀连续
+        const prev = streamedAll;
+        res = await models.chatStreamCollect(model, messages, { apiKey, tools }, (accum) => {
+          try { opts.onDelta(prev + accum); } catch {}
+        });
+      } else {
+        res = await models.chat(model, messages, { apiKey, tools });
+      }
     } catch (err) {
       // 模型不支持 tools 时报错 → 去掉 tools 按普通对话重试一次
       if (tools && /tool|function/i.test(err.message)) {
         tools = undefined;
         try {
-          res = await models.chat(model, messages, { apiKey });
+          if (opts.onDelta) {
+            const prev = streamedAll;
+            res = await models.chatStreamCollect(model, messages, { apiKey, tools }, (accum) => {
+              try { opts.onDelta(prev + accum); } catch {}
+            });
+          } else {
+            res = await models.chat(model, messages, { apiKey, tools });
+          }
         } catch (err2) {
           memory.recordUsage(botId, model.id, { promptTokens: err2.promptTokens, ok: false });
           throw err2;
@@ -135,7 +152,8 @@ async function chatWithBot(botId, content) {
     memory.recordUsage(botId, model.id, { usage: res.usage, promptTokens: res.promptTokens, ok: true });
 
     const toolCalls = res.toolCalls;
-    if (!toolCalls || !toolCalls.length) { reply = res.content || ''; break; }
+    if (!toolCalls || !toolCalls.length) { reply = res.content || ''; streamedAll += reply; break; }
+    streamedAll += res.content || '';
 
     // 在本地执行模型请求的工具
     for (const tc of toolCalls) {
@@ -176,6 +194,13 @@ async function chatWithBot(botId, content) {
   return reply;
 }
 
+// 流式回复开关：机器人覆盖 > 全局（默认关）。仅单聊（c2c）且带被动 msg_id 时可用。
+function streamEnabled(bot, evt) {
+  if (!evt || evt.scene !== 'c2c' || !evt.msgId) return false;
+  if (bot.streamReply === true || bot.streamReply === false) return bot.streamReply;
+  return app.getConfig().streamReply === true;
+}
+
 app.handleMessage = async (botId, evt) => {
   console.log(`[bot:${botId}] handleMessage 被调用，evt=`, JSON.stringify(evt));
   const cfg = app.getConfig();
@@ -191,9 +216,14 @@ app.handleMessage = async (botId, evt) => {
   memory.saveLastSender(botId, evt.sender);
   memory.saveMasterSender(botId, evt.sender); // 第一个对话者即主 ID
 
+  // 流式：官方 stream_messages（单聊），生成过程中分段推送，markdown 优先自动降级
+  const sink = streamEnabled(bot, evt)
+    ? app.bots.makeStreamSink(bot, { scene: evt.scene, targetId: evt.targetId, msgId: evt.msgId, msgSeq: 1 })
+    : null;
+
   try {
-    const reply = await chatWithBot(botId, content);
-    if (!reply) return;
+    const reply = await chatWithBot(botId, content, sink ? { onDelta: (t) => sink.push(t) } : {});
+    if (!reply) { if (sink) await sink.finish('（这次没想好说什么）'); return; }
     memory.appendSession(botId, 'assistant', reply);
 
     // 统一回复目标（normalizeEvent 已提供 targetId）
@@ -201,9 +231,18 @@ app.handleMessage = async (botId, evt) => {
       console.log(`[bot:${botId}] 缺少回复目标，不回复`);
       return;
     }
-    await app.bots.send(bot, evt.scene, evt.targetId, reply.slice(0, 4000), evt.msgId);
-    console.log(`[${evt.scene}:${botId}] 回复已发送`);
+    if (sink && sink.started) {
+      // 结束片携带剥离【记录】后的最终全文（前缀约束仍满足）
+      const done = await sink.finish(reply);
+      if (!done) await app.bots.send(bot, evt.scene, evt.targetId, reply.slice(0, 4000), evt.msgId, { markdown: true });
+      console.log(`[${evt.scene}:${botId}] 流式回复已发送`);
+    } else {
+      // 非流式（或流式首片失败降级）：markdown 优先，失败自动回退纯文本
+      await app.bots.send(bot, evt.scene, evt.targetId, reply.slice(0, 4000), evt.msgId, { markdown: true });
+      console.log(`[${evt.scene}:${botId}] 回复已发送`);
+    }
   } catch (err) {
+    if (sink && sink.started) await sink.finish('（生成遇到问题，请稍后再试）').catch(() => {});
     console.error(`[bot:${botId}] 回复失败:`, err.message);
   }
 };
@@ -322,7 +361,7 @@ async function hbFire(bot, slot, h, taskPrompt) {
   if (!text) return;
   memory.appendSession(id, 'assistant', text);
   try {
-    await app.bots.send(b, 'c2c', master, text.slice(0, 4000), '');
+    await app.bots.send(b, 'c2c', master, text.slice(0, 4000), '', { markdown: true });
     console.log(`[heart:${id}] 已主动发言 → ${master}：${text.slice(0, 40)}`);
   } catch (err) {
     console.warn(`[heart:${id}] 发送失败: ${err.message}`);
@@ -1211,6 +1250,7 @@ function handleApi(req, res, p) {
       if (body.models) cfg.models = body.models;
       if (body.port) cfg.port = Number(body.port);
       if (body.webSearch === true || body.webSearch === false) cfg.webSearch = body.webSearch;
+      if (body.streamReply === true || body.streamReply === false) cfg.streamReply = body.streamReply;
       if (['auto', 'light', 'browser'].includes(body.searchMode)) cfg.searchMode = body.searchMode;
       app.saveConfig(cfg);
       app.bots.sync(cfg);
@@ -1631,7 +1671,7 @@ ${listDesc}
             const cfg = app.getConfig();
             const bot = cfg.bots.find((x) => x.id === m[1]);
             if (bot) {
-              await app.bots.send(bot, 'c2c', master, reply.slice(0, 4000), '');
+              await app.bots.send(bot, 'c2c', master, reply.slice(0, 4000), '', { markdown: true });
               pushed = true;
             }
           } catch (e) { console.log(`[bot:${m[1]}] 主动推送主 ID 失败: ${e.message}`); }
