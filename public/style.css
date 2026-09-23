@@ -288,6 +288,27 @@ body::after {
 .side-item .dot { flex: none; }
 .side-empty { font-size: 11px; color: var(--text-faint); padding: 6px; font-style: italic; }
 
+/* 后端未连接提示（桌面壳场景：先开了壳、服务还没起） */
+.offline-card {
+  max-width: 520px; margin: 8vh auto 0; padding: 32px 28px;
+  background: var(--panel-solid); border: 1px solid var(--line);
+  border-radius: var(--radius); text-align: center;
+  box-shadow: var(--shadow);
+}
+.offline-icon { font-size: 34px; line-height: 1; margin-bottom: 14px; }
+.offline-card h2 { font-size: 17px; font-weight: 600; margin: 0 0 10px; color: var(--text); }
+.offline-desc { font-size: 13px; color: var(--err); margin: 0 0 18px; }
+.offline-hint { font-size: 13px; color: var(--text-dim); margin: 0 0 10px; line-height: 1.65; }
+.offline-cmd {
+  display: inline-block; margin: 0 0 18px; padding: 10px 18px;
+  font-family: var(--font); font-size: 13px;
+  color: var(--accent-strong); background: var(--input-bg);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  user-select: all;
+}
+.offline-actions { margin: 6px 0 16px; }
+.offline-target { font-size: 11px; color: var(--text-faint); margin: 0; }
+
 .side-foot {
   display: flex; align-items: center; gap: 8px;
   padding: 12px 14px;
@@ -774,22 +795,64 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 .mf-tier.t1 { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
 .mf-tier.t2 { color: #3fb27f; border-color: color-mix(in srgb, #3fb27f 55%, transparent); }
 .mf-tier.t3 { color: var(--text-faint); }
+.mf-sys {
+  font-size: 10px; padding: 1px 6px; border-radius: 4px; flex-shrink: 0;
+  font-family: var(--font); color: var(--text-dim);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
 .mem-mgr .mem-files { padding-right: 2px; }
 
 /* 记忆管理：底部「AI 蒸馏内容」 */
-.mem-distill { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; max-height: 38%; overflow-y: auto; padding: 2px; }
-.distill-block {
-  border: 1px solid var(--line); border-radius: 8px;
-  padding: 8px 12px; background: var(--ctl-bg);
-  min-width: 0; overflow: hidden;
+.mem-distill {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 12px; padding: 6px;
+  max-height: 330px; overflow-y: auto;
+  align-content: start;
 }
-.distill-block.span2 { grid-column: 1 / -1; }
-.distill-label { font-size: 11px; font-weight: 700; color: var(--text-faint); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
-.distill-body { font-size: 12px; line-height: 1.75; word-break: break-word; max-height: 200px; overflow-y: auto; }
+.distill-block {
+  border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 14px; background: var(--ctl-bg);
+  min-width: 0; overflow: hidden;
+  transition: border-color .2s, box-shadow .2s, transform .2s var(--ease);
+}
+.distill-block:hover { border-color: var(--accent-glow); box-shadow: var(--ctl-inset), var(--lift-shadow); }
+.distill-block.span2 {
+  grid-column: 1 / -1;
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 5%, transparent), transparent 70%), var(--ctl-bg);
+}
+.distill-label {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+  font-size: 11px; font-weight: 700; letter-spacing: .03em;
+  color: var(--text-faint); margin-bottom: 10px;
+}
+.distill-body { font-size: 12px; line-height: 1.9; word-break: break-word; max-height: 190px; overflow-y: auto; color: var(--text); }
 .distill-ok { color: #3fb27f; font-weight: 400; }
 .distill-warn { color: var(--err, #e5484d); font-weight: 400; }
 .distill-label .spacer { flex: 1; }
-.distill-count { font-weight: 400; }
+.distill-count { font-weight: 400; opacity: .85; }
+
+/* AI 蒸馏内容「折叠小卡片」：默认只显示标题行 + 操作按钮，点击展开/收起正文 */
+.distill-label { cursor: pointer; user-select: none; }
+.distill-label:hover { color: var(--text-dim); }
+.dd-ic { font-size: 10px; color: var(--text-faint); line-height: 1; transition: transform .18s var(--ease); }
+.distill-block.folded { padding: 7px 12px; }
+.distill-block.folded:hover { border-color: var(--accent-glow); box-shadow: var(--ctl-inset), var(--lift-shadow); }
+.distill-block.folded .distill-body { display: none; }
+.distill-block.folded .dd-ic { transform: rotate(-90deg); }
+@media (hover: none) { .distill-label { cursor: pointer; } }
+
+/* 人格核心卡：字段标签 + 内容两列，替代挤成一堆的连续文本 */
+.distill-core { display: flex; flex-direction: column; gap: 6px; }
+.dc-row { display: grid; grid-template-columns: 72px 1fr; gap: 2px 12px; align-items: baseline; }
+.dc-k { font-size: 11px; color: var(--text-faint); line-height: 1.8; user-select: none; }
+.dc-v { font-size: 12.5px; line-height: 1.8; color: var(--text); word-break: break-word; }
+@media (max-width: 600px) {
+  .mem-distill { grid-template-columns: 1fr; }
+  .dc-row { grid-template-columns: 1fr; gap: 0; }
+  .dc-k { font-weight: 600; }
+}
 .upload-modal { width: min(480px, 92vw); }
 .upload-modal input[type="file"] { font-size: 12px; }
 .tier-pick { display: flex; gap: 14px; font-size: 12px; }
@@ -1417,6 +1480,8 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 .gen-row { display: flex; align-items: center; gap: 10px; }
 .gen-label { font-size: 12px; color: var(--text-dim); width: 64px; flex-shrink: 0; letter-spacing: .03em; }
 .gen-hint { font-size: 10px; color: var(--text-faint); line-height: 1.5; }
+.gen-sel-wrap { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.gen-sel { width: min(380px, 100%); }
 .mode-cards { display: flex; gap: 8px; flex: 1; }
 .mode-card {
   flex: 1;

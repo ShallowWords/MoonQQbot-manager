@@ -9,6 +9,21 @@ let masterSender = '';       // 主 ID：第一个对话者（主动发消息默
 const $ = (s) => document.querySelector(s);
 const main = $('#main');
 
+// ---------- 后端地址 ----------
+// 两种运行方式：
+//   1) 浏览器直连面板（http://127.0.0.1:4357）→ 前端与 API 同源，留空即可
+//   2) Tauri 桌面壳 → 前端从 http://tauri.localhost 加载，调 127.0.0.1 的 API 属跨域，
+//      必须用绝对地址（服务端已放行 tauri.localhost 系列的 CORS）
+// 判断依据：tauri.localhost / tauri: 协议来自壳；其余本地 http 视为浏览器直连。
+const IN_DESKTOP = /^(tauri|https?:\/\/tauri\.localhost)/i.test(location.origin) ||
+  location.hostname === 'tauri.localhost';
+const API_BASE = IN_DESKTOP ? 'http://127.0.0.1:4357' : '';
+// 静态资源（头像等）同样带上前缀，否则壳里 /avatars/*.webp 会 404
+const assetUrl = (u) => (!u ? '' : /^https?:/i.test(u) ? u : API_BASE + u);
+
+// ID 安全字符集：与后端路由/记忆目录一致（仅中文/字母/数字/下划线/连字符，防注入与 404）
+const ID_OK = /^[\w\u4e00-\u9fa5-]{1,64}$/;
+
 const STATUS_MAP = { '已连接': 'ok', '连接中': 'warn', '未配置': 'warn', '未启动': 'warn', '已断开': 'err', '错误': 'err', '初始化失败': 'err' };
 
 // ---------- 基础工具 ----------
@@ -16,10 +31,10 @@ async function api(url, method = 'GET', body) {
   const opts = { method, headers: {} };
   if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
   try {
-    const res = await fetch(url, opts);
+    const res = await fetch(API_BASE + url, opts);
     return await res.json();
   } catch {
-    return { ok: false, err: '网络错误' };
+    return { ok: false, err: IN_DESKTOP ? '无法连接后端服务（请确认服务已启动）' : '网络错误' };
   }
 }
 
@@ -108,9 +123,14 @@ async function loadState(keepView = true) {
   if (state.ok) {
     $('#status-dot').className = 'dot on';
     $('#conn-text').textContent = '后端已连接';
+    _offlineShown = false;
   } else {
     $('#status-dot').className = 'dot off';
     $('#conn-text').textContent = '连接失败';
+    // 服务没起来时给一个可操作的提示，而不是空白界面。
+    // 桌面壳场景很常见：先双击了壳、后端还没启动。
+    showOffline(state.err);
+    return;
   }
   // 校验当前选中项仍存在
   if (view.type === 'bot' && view.id && !(state.bots || []).some(b => b.id === view.id)) view = { type: 'bot', id: null };
@@ -118,6 +138,36 @@ async function loadState(keepView = true) {
   if (!view.id && (view.type === 'bot') && (state.bots || []).length) view = { type: 'bot', id: state.bots[0].id };
   renderSidebar();
   renderMain();
+}
+
+// ---------- 后端不可用提示 ----------
+let _offlineShown = false;
+function showOffline(err) {
+  if (_offlineShown) return;
+  _offlineShown = true;
+  const target = IN_DESKTOP ? 'http://127.0.0.1:4357' : '本机后端服务';
+  $('#bot-list').innerHTML = '<div class="side-empty">后端未连接</div>';
+  main.innerHTML = `
+    <div class="offline-card">
+      <div class="offline-icon">⚡</div>
+      <h2>无法连接后端服务</h2>
+      <p class="offline-desc">${esc(err || '网络错误')}</p>
+      <p class="offline-hint">面板只是外壳，QQ 机器人服务需要单独运行。请在项目根目录执行：</p>
+      <pre class="offline-cmd">node server.js</pre>
+      <p class="offline-hint">或双击 <b>启动面板.bat</b>。服务就绪后点下面的按钮重试。</p>
+      <div class="offline-actions">
+        <button class="primary" onclick="retryConnect()">↻ 重试连接</button>
+      </div>
+      <p class="offline-target">连接目标：${esc(target)}</p>
+    </div>`;
+}
+
+async function retryConnect() {
+  _offlineShown = false;
+  main.innerHTML = '<div class="offline-card"><p class="offline-desc">正在连接…</p></div>';
+  await loadState();
+  if (_offlineShown) toast('仍然无法连接后端服务', 'err');
+  else toast('已连接', 'ok');
 }
 
 // ---------- 左侧导航（仅机器人列表；模型/设置入口在底部） ----------
@@ -192,7 +242,7 @@ function toggleBotEdit() { _botEditing = !_botEditing; renderMain(); }
 // 头像渲染：URL 图片 / 本地 /avatars 图片 / emoji / 名称首字
 function avatarInner(b) {
   const a = b.avatar || '';
-  if (/^(https?:\/\/|\/)/i.test(a)) return `<img src="${esc(a)}" alt="" onerror="this.style.visibility='hidden'">`;
+  if (/^(https?:\/\/|\/)/i.test(a)) return `<img src="${esc(assetUrl(a))}" alt="" onerror="this.style.visibility='hidden'">`;
   if (a) return esc(a);
   return esc((b.name || b.id || 'B').slice(0, 1));
 }
@@ -958,7 +1008,9 @@ function renderMemFiles(id, files) {
         <span class="slider"></span>
       </label>
       <span class="mf-name">${esc(f.name)}</span>
-      <span class="mf-tier t${f.tier}" title="记忆层级：拖动卡片到左侧层级桶，或点击卡片在弹窗中修改">${TIER_LABEL[f.tier] || '摘要'}</span>
+      ${f.sys
+        ? '<span class="mf-sys" title="由系统自动生成与维护，对应下方「AI 蒸馏内容」">🤖 系统</span>'
+        : `<span class="mf-tier t${f.tier}" title="记忆层级：拖动卡片到左侧层级桶，或点击卡片在弹窗中修改">${TIER_LABEL[f.tier] || '摘要'}</span>`}
       <span class="mf-desc">${esc(f.desc) || '无备注'}</span>
       <span class="mf-state">${f.enabled ? '启用' : '已禁用'}</span>
       <button class="ghost sm mf-del" onclick="event.stopPropagation();delMemoryFile('${id}','${f.key}')" title="删除文件">✕</button>
@@ -1078,9 +1130,10 @@ async function loadMemLayers(id) {
 }
 
 function layStatText(s) {
-  const coreStat = s.core ? (s.coreFresh ? '核心卡 ✓' : '核心卡 ⚠待蒸馏') : (s.seedEmpty ? '核心卡（种子为空）' : '核心卡 未蒸馏');
-  const sumStat = ['plot', 'content'].map((k) => { const x = s.summaries[k]; return x ? (x.fresh ? '✓' : '待更新') : '—'; }).join('/');
-  return `${coreStat} · 事件 ${s.eventCount} 条 · 摘要 ${sumStat}`;
+  const coreStat = s.core ? (s.coreFresh ? '核心卡 ✓' : '核心卡 ⚠待蒸馏') : (s.seedEmpty ? '核心卡（无用户文件）' : '核心卡 未蒸馏');
+  const vals = Object.values(s.summaries || {});
+  const created = vals.filter((x) => x && x.exists).length;
+  return `${coreStat} · 事件 ${s.eventCount} 条 · 摘要 ${created}/${vals.length}`;
 }
 
 function renderMemLayers(id) {
@@ -1096,27 +1149,56 @@ function renderMemDistill(id) {
   const s = _layState;
   const badge = (state) => state === true ? '<span class="distill-ok">✓ 与源同步</span>'
     : state === false ? '<span class="distill-warn">⚠ 待更新</span>' : '';
+  const coreRows = s.core ? [['身份', s.core.core.identity], ['语气', s.core.core.tone], ['边界', s.core.core.boundaries], ['关系现状', s.core.core.relationship_state], ['演化备注', s.core.core.evolved_notes]]
+    .map(([k, v]) => `<div class="dc-row"><span class="dc-k">${k}</span><span class="dc-v">${esc(v || '—')}</span></div>`).join('') : '';
   const coreBody = s.core
-    ? `身份：${esc(s.core.core.identity || '-')}<br>语气：${esc(s.core.core.tone || '-')}<br>边界：${esc(s.core.core.boundaries || '-')}<br>关系现状：${esc(s.core.core.relationship_state || '-')}<br>演化备注：${esc(s.core.core.evolved_notes || '-')}`
-    : `<span class="lay-dim">${s.seedEmpty ? '人格种子为空，无法蒸馏' : '尚未蒸馏——对话后自动生成，或点右上「↻ 立即蒸馏」'}</span>`;
-  const secBody = (k) => {
-    const x = s.summaries[k];
-    return x && x.sections.length
-      ? x.sections.map((t) => '· ' + esc(t)).join('<br>')
-      : `<span class="lay-dim">尚未生成（蒸馏时自动生成）</span>`;
-  };
+    ? `<div class="distill-core">${coreRows}</div>`
+    : `<span class="lay-dim">${s.seedEmpty ? '尚无用户文件——点「↻ 立即蒸馏」，AI 将依据近期经历与对话归纳人格' : '尚未蒸馏——对话后自动生成，或点右上「↻ 立即蒸馏」'}</span>`;
+  const secBody = (x) => x.sections.length
+    ? x.sections.map((t) => '· ' + esc(t)).join('<br>')
+    : '<span class="lay-dim">源文件为空，暂无可摘要内容（填写源文件后点「生成/更新」）</span>';
+  const secBadge = (x) => !x.exists ? '<span class="distill-warn">未创建</span>'
+    : x.empty ? '<span class="distill-ok">✓ 已创建（源为空）</span>'
+    : (x.fresh ? '<span class="distill-ok">✓ 与源同步</span>' : '<span class="distill-warn">⚠ 源已变更，待更新</span>');
+  const sumBlocks = Object.entries(s.summaries || {}).map(([k, x]) => `
+    <div class="distill-block"><div class="distill-label">${esc(x.name || k)}摘要 ${secBadge(x)}<span class="spacer"></span><button class="ghost sm" onclick="distillNow('${id}')">↻ 生成/更新</button></div><div class="distill-body">${secBody(x)}</div></div>`).join('');
   const evBody = s.summary
     ? esc(s.summary).replace(/\n/g, '<br>')
-    : `<span class="lay-dim">暂无（经历事件超过 30 条后自动压缩生成）</span>`;
+    : (s.summaryFileExists ? '<span class="lay-dim">✓ 文件已创建（暂无经历可压缩）</span>' : '<span class="lay-dim">未创建（点「生成/更新」立即创建）</span>');
   const evPreview = s.eventCount
     ? s.events.slice(-3).reverse().map((e) => `· [${fmtShortTs(e.ts)}] ${esc(e.event)}`).join('<br>')
     : `<span class="lay-dim">暂无事件（对话中自动提炼，或使用「AI 归档」记录剧情）</span>`;
+  // 「从核心卡还原种子」：种子（persona.md）丢失/清空后一键恢复；需已有核心卡
+  const coreSeedBtn = s.core
+    ? `<button class="ghost sm" onclick="seedFromCore('${id}')" title="把核心卡内容写回 persona.md（种子丢失/清空后一键恢复）">☰ 还原种子</button>`
+    : '';
   el.innerHTML = `
-    <div class="distill-block span2"><div class="distill-label">人格核心卡 ${badge(s.core ? s.coreFresh : null)}${s.core && s.core.manual ? '<span class="distill-ok">手动编辑</span>' : ''}<span class="spacer"></span><button class="ghost sm" onclick="openCoreEditModal('${id}')">✎ 编辑</button></div><div class="distill-body">${coreBody}</div></div>
-    <div class="distill-block"><div class="distill-label">剧情摘要 ${badge(s.summaries.plot ? s.summaries.plot.fresh : null)}<span class="spacer"></span><button class="ghost sm" onclick="distillNow('${id}')">↻ 重新生成</button></div><div class="distill-body">${secBody('plot')}</div></div>
-    <div class="distill-block"><div class="distill-label">内容摘要 ${badge(s.summaries.content ? s.summaries.content.fresh : null)}<span class="spacer"></span><button class="ghost sm" onclick="distillNow('${id}')">↻ 重新生成</button></div><div class="distill-body">${secBody('content')}</div></div>
-    <div class="distill-block"><div class="distill-label">经历事件流<span class="distill-count">${s.eventCount} 条 · 归档 ${s.archiveCount}</span><span class="spacer"></span><button class="ghost sm" onclick="openEventManage('${id}')">⚙ 管理</button></div><div class="distill-body">${evPreview}</div></div>
-    <div class="distill-block"><div class="distill-label">经历摘要（旧事件压缩）<span class="spacer"></span>${s.summary ? `<button class="ghost sm" onclick="clearEventsSummary('${id}')">清空</button>` : ''}</div><div class="distill-body">${evBody}</div></div>`;
+    <div class="distill-block span2 ${dfCls('core')}"><div class="distill-label" onclick="distillFold(event,'${id}','core')" title="点击展开/收起正文"><span class="dd-ic">▾</span>人格核心卡 ${badge(s.core ? s.coreFresh : null)}${s.core && s.core.manual ? '<span class="distill-ok">手动编辑</span>' : ''}<span class="spacer"></span>${coreSeedBtn}<button class="ghost sm" onclick="openCoreEditModal('${id}')">✎ 编辑</button></div><div class="distill-body">${coreBody}</div></div>
+    ${sumBlocks}
+    <div class="distill-block ${dfCls('events')}"><div class="distill-label" onclick="distillFold(event,'${id}','events')" title="点击展开/收起正文"><span class="dd-ic">▾</span>经历事件流<span class="distill-count">${s.eventCount} 条 · 归档 ${s.archiveCount}</span><span class="spacer"></span><button class="ghost sm" onclick="openEventManage('${id}')">⚙ 管理</button></div><div class="distill-body">${evPreview}</div></div>
+    <div class="distill-block ${dfCls('evsum')}"><div class="distill-label" onclick="distillFold(event,'${id}','evsum')" title="点击展开/收起正文"><span class="dd-ic">▾</span>经历摘要（旧事件压缩）<span class="spacer"></span><button class="ghost sm" onclick="regenEventsSummary('${id}')">生成/更新</button>${(s.summary || s.summaryFileExists) ? `<button class="ghost sm" onclick="clearEventsSummary('${id}')">清空</button>` : ''}</div><div class="distill-body">${evBody}</div></div>`;
+}
+
+// AI 蒸馏内容块展开状态：key = `${botId}::${块标识}`；重绘/切页后保持用户选择
+const _dfOpen = new Set();
+function distillFold(e, id, k) {
+  const label = e.currentTarget;
+  if (!label) return;
+  if (e.target.closest('button')) return;   // 点按钮只执行按钮功能，不触发展开/收起
+  const block = label.closest('.distill-block');
+  if (!block) return;
+  const key = id + '::' + k;
+  const fold = block.classList.toggle('folded');
+  if (fold) _dfOpen.delete(key); else _dfOpen.add(key);
+}
+
+// 手动生成经历摘要：即使事件未超阈值也立即创建/更新摘要文件（走 distill 管线）
+async function regenEventsSummary(id) {
+  const r = await api(`/api/memory/${id}/distill`, 'POST', {});
+  if (!r.ok) return toast(r.err || '生成失败', 'err');
+  const ev = r.results && r.results.events;
+  toast(`经历摘要: ${ev && ev.ok ? '✓ 已生成/更新' : '✗ ' + ((ev && ev.err) || '失败')}`, ev && ev.ok ? 'ok' : 'err');
+  loadMemLayers(id);
 }
 
 // ---- 系统归纳内容管理（事件 / 摘要） ----
@@ -1209,13 +1291,17 @@ async function doUpload(id) {
 }
 
 async function distillNow(id) {
-  toast('蒸馏中…（核心卡 + 剧情/内容摘要 + 事件压缩）');
+  toast('蒸馏中…（核心卡 + 全部摘要索引文件 + 事件压缩）');
   const r = await api(`/api/memory/${id}/distill`, 'POST', {});
   if (!r.ok) return toast(r.err || '蒸馏失败', 'err');
   const res = r.results || {};
-  const line = (name, x) => `${name}: ${x && x.ok ? '✓' : '✗ ' + ((x && x.err) || '失败')}`;
-  const okCount = ['core', 'plot', 'content'].filter((k) => res[k] && res[k].ok).length;
-  toast([line('核心卡', res.core), line('剧情摘要', res.plot), line('内容摘要', res.content)].join('　'), okCount ? 'ok' : 'err');
+  const parts = [`核心卡 ${res.core && res.core.ok ? '✓' : '✗'}`, `经历摘要 ${res.events && res.events.ok ? '✓' : '✗'}`];
+  let okN = (res.core?.ok ? 1 : 0) + (res.events?.ok ? 1 : 0);
+  for (const [k, v] of Object.entries(res.summaries || {})) {
+    parts.push(`${v.name || k} ${v.ok ? (v.empty ? '✓（源为空）' : '✓') : '✗ ' + (v.err || '失败')}`);
+    if (v.ok) okN++;
+  }
+  toast(parts.join('　'), okN ? 'ok' : 'err');
   loadMemLayers(id);
 }
 
@@ -1225,7 +1311,7 @@ const CORE_FIELDS = [
   ['tone', '语气', '例：说话轻柔含蓄，常用古风措辞'],
   ['boundaries', '边界', '例：不做的事 / 禁忌 / 底线'],
   ['relationship_state', '关系现状', '例：初识 / 熟络 / 深度依恋'],
-  ['evolved_notes', '演化备注', '种子之外从经历中沉淀的性格变化'],
+  ['evolved_notes', '演化备注', '从经历与对话中沉淀的性格变化'],
 ];
 
 function openCoreEditModal(id) {
@@ -1239,7 +1325,7 @@ function openCoreEditModal(id) {
       <div class="modal-head"><span>✎ 编辑人格核心卡</span><span class="spacer"></span>
         <button class="ghost sm" onclick="document.getElementById('core-edit-modal').remove()">✕ 关闭</button></div>
       <div class="modal-body">
-        <p class="empty-hint" style="margin:0 0 10px">核心卡每轮对话注入。手动编辑后不会被周期性自动蒸馏覆盖；但修改「人格/特征」种子会触发重新蒸馏。</p>
+        <p class="empty-hint" style="margin:0 0 10px">核心卡每轮对话注入。手动编辑后不会被周期性自动蒸馏覆盖；但修改「人格/特征」等用户文件会触发重新蒸馏。</p>
         ${CORE_FIELDS.map(([k, label, ph]) => `
           <label class="frm">${label}</label>
           <textarea id="core-${k}" rows="2" placeholder="${esc(ph)}">${esc((c[k] || '').replace(/^-$/, ''))}</textarea>`).join('')}
@@ -1256,6 +1342,14 @@ async function saveCore(id) {
   const r = await api(`/api/memory/${id}/core`, 'PUT', { core });
   if (r.ok) { toast('核心卡已保存（手动编辑版，不被周期蒸馏覆盖）', 'ok'); const m = document.getElementById('core-edit-modal'); if (m) m.remove(); loadMemLayers(id); }
   else toast(r.err || '保存失败', 'err');
+}
+
+// 种子丢失/为空时：把核心卡内容反向写入 persona.md（种子），恢复可蒸馏状态
+async function seedFromCore(id) {
+  if (!(await uiConfirm({ title: '从核心卡生成种子', message: '将把当前人格核心卡的内容写回「人格」记忆文件作为种子。\n生成后核心卡会基于新种子自动重新蒸馏，确认？', okText: '生成' }))) return;
+  const r = await api(`/api/memory/${id}/seed-from-core`, 'POST', {});
+  if (r.ok) { toast('种子已生成 ✓（核心卡将基于新种子重新蒸馏）', 'ok'); loadMemLayers(id); loadMemoryFiles(id); }
+  else toast(r.err || '生成失败', 'err');
 }
 
 // ---- 记忆文件概览弹窗：预览内容 + 编辑备注 ----
@@ -1398,9 +1492,10 @@ async function newMemoryFile(id) {
 
 // 删除记忆文件
 async function delMemoryFile(id, key) {
-  if (!(await uiConfirm({ title: '删除记忆文件', message: `确定删除记忆文件「${key}.md」？\n删除后不会自动重建，不可恢复。`, okText: '删除', danger: true }))) return;
+  const preset = ['persona', 'traits', 'plot', 'content'].includes(key);
+  if (!(await uiConfirm({ title: '删除记忆文件', message: `确定删除记忆文件「${key}.md」？\n${preset ? '预设文件会立即重建为空白模板（相当于清空重置）。' : '自定义文件将彻底移除、不可恢复。'}`, okText: '删除', danger: true }))) return;
   const r = await api(`/api/memory/${id}/files/${key}`, 'DELETE');
-  r.ok ? toast('已删除', 'ok') : toast(r.err, 'err');
+  r.ok ? toast(preset ? '已清空，模板已重建' : '已删除', 'ok') : toast(r.err, 'err');
   if (r.ok) loadMemoryFiles(id);
 }
 let _sessionsCache = {}; // botId -> [{role,content,ts}] 会话缓存（供展开/导出）
@@ -1499,6 +1594,8 @@ async function directChat(id) {
 
 // ---- 会话记录展开（独立弹窗卡片，完整展示全部记录） ----
 function expandSessions(id) {
+  const old = $('#session-modal');
+  if (old) old.remove();   // 防叠加：重开前先清掉旧的会话弹窗
   const list = _sessionsCache[id] || [];
   const bot = (state.bots || []).find(x => x.id === id);
   const overlay = document.createElement('div');
@@ -1950,7 +2047,7 @@ async function adminSend(prompt, botIdOverride) {
   msgs.insertAdjacentHTML('beforeend', `<div class="admin-msg me"><div class="admin-bubble">${esc(content)}</div></div>`);
   msgs.scrollTop = msgs.scrollHeight;
   _adminBusy = true;
-  const sendBtn = document.querySelector('.admin-modal .modal-foot .primary');
+  const sendBtn = document.querySelector('.admin-modal .admin-input-row .primary');
   if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '思考中…'; }
   if (chattingBotId) { _chatting.add(chattingBotId); renderSidebar(); }
   const isOpen = () => !!document.getElementById('admin-modal');   // 面板是否还开着（后台模式跳过 DOM 渲染）
@@ -2028,7 +2125,7 @@ async function adminSend(prompt, botIdOverride) {
       let streamSaw = false;   // 是否收到过任何流式事件（判断本环境是否支持 SSE）
       const pendings = [];   // 待确认编辑：统一在流式收尾时弹出，避免中途事件丢失
       try {
-        const resp = await fetch('/api/admin/chat/stream', {
+        const resp = await fetch(API_BASE + '/api/admin/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ content, history: hist, modelId: _adminModelId, botId: chattingBotId, sessionId: sid }),
@@ -2036,6 +2133,7 @@ async function adminSend(prompt, botIdOverride) {
         });
         if (resp.ok && resp.body) {
           let saw = streamSaw;
+          let doneSeen = false;   // 收到过服务端 done 事件 → 本轮已完成，不应重试
           await readAdminSSE(resp.body, (ev) => {
             saw = true;
             streamSaw = true;
@@ -2052,6 +2150,7 @@ async function adminSend(prompt, botIdOverride) {
             } else if (ev.type === 'note') {
               if (isOpen()) aiRow.insertAdjacentHTML('beforebegin', chipHtml({ name: 'note', summary: ev.d || '', ok: true }));
             } else if (ev.type === 'done') {
+              doneSeen = true;   // 收到 done → 服务端已完成本轮
               modelName = ev.modelName || '';
               if (Array.isArray(ev.pendings)) for (const p of ev.pendings) if (p) pendings.push(p);
             }
@@ -2070,6 +2169,12 @@ async function adminSend(prompt, botIdOverride) {
             if (isOpen()) { sb.innerHTML = '（管理员已生成修改建议）'; for (const p of pendings) confirmBar(p); }
             ok = true;
             adminLoadSessions();
+          } else if (doneSeen) {
+            // 服务端已正常结束但无正文/无待确认编辑（如纯工具轮后未产出最终文本）：
+            // 视为完成，避免用同一请求重跑一遍普通模式造成重复副作用
+            _adminHistory.push({ role: 'assistant', content: acc || '（本轮未输出文本）' });
+            if (isOpen()) { sb.innerHTML = (modelName ? `<span class="admin-model-tag">${esc(modelName)}</span>` : '') + (acc ? mdSafe(acc) : '<span class="lay-dim">本轮未输出文本（已完成）</span>'); }
+            ok = true;
           }
         }
       } catch (e) { /* 流式连接异常，稍后统一处理 */ }
@@ -2088,7 +2193,7 @@ async function adminSend(prompt, botIdOverride) {
       const c3 = new AbortController();
       const to = setTimeout(() => { try { c3.abort(); } catch {} }, 60000);
       try {
-        const resp = await fetch('/api/admin/chat', {
+        const resp = await fetch(API_BASE + '/api/admin/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ content, history: hist, modelId: _adminModelId, botId: chattingBotId, sessionId: sid }),
@@ -2262,6 +2367,7 @@ async function applyAdminModel(btn) {
   let cm = null;
   try { cm = JSON.parse(btn.dataset.json); } catch { return toast('配置解析失败', 'err'); }
   if (!cm || !cm.id) return toast('配置缺少模型 ID', 'err');
+  if (!ID_OK.test(String(cm.id))) return toast('模型 ID 含非法字符（仅允许中文/字母/数字/下划线/连字符，最长 64 位）', 'err');
   const models = (state.models || []).slice();
   if (models.some(m => m.id === cm.id)) return toast('模型 ID 已存在：' + cm.id, 'err');
   if (!cm.baseURL || !cm.model) return toast('配置缺少 baseURL 或 model', 'err');
@@ -2551,6 +2657,7 @@ async function createBot() {
     intents: ['GROUP_AND_C2C_EVENT', 'PUBLIC_GUILD_MESSAGES'],
   };
   if (!entry.id) return toast('请填写机器人 ID', 'err');
+  if (!ID_OK.test(entry.id)) return toast('机器人 ID 含非法字符（仅允许中文/字母/数字/下划线/连字符，最长 64 位）', 'err');
   if ((state.bots || []).some(b => b.id === entry.id)) return toast('该 ID 已存在', 'err');
   const bots = (state.bots || []).concat(entry);
   const r = await api('/api/config', 'PUT', { bots });
@@ -2818,6 +2925,7 @@ async function createModel() {
     webSearch: !!$('#m-web')?.checked,
   };
   if (!entry.id) return toast('请填写模型 ID', 'err');
+  if (!ID_OK.test(entry.id)) return toast('模型 ID 含非法字符（仅允许中文/字母/数字/下划线/连字符，最长 64 位）', 'err');
   if ((state.models || []).some(m => m.id === entry.id)) return toast('该 ID 已存在', 'err');
   const models = (state.models || []).concat(entry);
   const r = await api('/api/config', 'PUT', { models });
@@ -2955,6 +3063,16 @@ function renderGeneral() {
             </div>`).join('')}
         </div>
       </div>
+      <div class="gen-row" style="align-items:flex-start;margin-top:14px">
+        <span class="gen-label" style="padding-top:8px">蒸馏/总结模型</span>
+        <div class="gen-sel-wrap">
+          <select id="g-distill" class="gen-sel">
+            <option value="">跟随各机器人绑定模型（默认）</option>
+            ${(state.models || []).map(m => `<option value="${esc(m.id)}" ${state.distillModel === m.id ? 'selected' : ''}>${esc(m.name || m.id)}（${esc(m.id)}）</option>`).join('')}
+          </select>
+          <div class="gen-hint">核心卡蒸馏、文件分段摘要、事件压缩、逐轮记忆提炼、精彩时刻、AI 归档等后台总结任务使用的模型；不指定则各自跟随机器人绑定的模型</div>
+        </div>
+      </div>
       <div class="gen-row" style="margin-top:12px">
         <span class="gen-label">流式回复</span>
         <label class="switch" title="${state.streamReply === true ? '点击关闭全局流式回复' : '点击开启全局流式回复'}">
@@ -2973,7 +3091,8 @@ function pickMode(el) {
 }
 
 async function saveGeneral() {
-  const r = await api('/api/config', 'PUT', { webSearch: !!$('#g-web').checked, searchMode: _gMode, streamReply: !!$('#g-stream').checked });
+  const distillModel = $('#g-distill') ? $('#g-distill').value : '';
+  const r = await api('/api/config', 'PUT', { webSearch: !!$('#g-web').checked, searchMode: _gMode, streamReply: !!$('#g-stream').checked, distillModel });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
   if (r.ok) loadState();
 }

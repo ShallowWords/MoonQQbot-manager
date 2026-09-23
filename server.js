@@ -30,6 +30,31 @@ const MIME = {
   '.svg': 'image/svg+xml',
 };
 
+// ---- 桌面壳（Tauri）跨域放行 ----
+// 浏览器直连面板时是「同源」，不需要 CORS；但 Tauri 壳把前端从
+// http://tauri.localhost 加载，再调 http://127.0.0.1:<port> 的 API 就成了跨域。
+// WebView2 和浏览器一样会执行同源策略，服务端不放行就会得到无信息的
+// "Failed to fetch"。这里只放行已知的本地壳来源，不开放通配。
+// 注意各平台 origin 不同：Windows/Android 是 http(s)://tauri.localhost，
+// macOS/Linux 是 tauri://localhost。
+const CORS_ORIGINS = new Set([
+  'http://tauri.localhost',
+  'https://tauri.localhost',
+  'tauri://localhost',
+  'http://localhost:1420',   // Vite 开发服务器（tauri dev）
+  'http://127.0.0.1:1420',
+]);
+function applyCors(req, res) {
+  const origin = req.headers.origin;
+  if (origin && CORS_ORIGINS.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Max-Age', '86400');
+}
+
 // ---- 上下文（各模块共享）----
 const app = {
   env: store.loadEnv(),
@@ -39,15 +64,21 @@ const app = {
   memory,
 };
 
-// 为机器人构造记忆维护用的轻量模型调用器：chatFn(messages, opts) → 模型回复文本
-// 自动解析机器人绑定的模型与 Key，并记录 token 用量；无可用模型时返回 null。
+// 为机器人构造「蒸馏/总结」用轻量模型调用器：chatFn(messages, opts) → 模型回复文本
+// 模型选择：设置页指定全局「蒸馏/总结模型」(cfg.distillModel) 时，核心卡蒸馏/摘要/事件压缩/
+// 逐轮提炼/精彩时刻/AI 归档等后台总结任务统一使用该模型；未指定则跟随机器人绑定的模型。
+// 自动记录 token 用量；无任何可用模型时返回 null。
 function makeChatFn(botId) {
   const cfg = app.getConfig();
   const bot = cfg.bots.find((b) => b.id === botId);
-  const model = bot && (cfg.models.find((m) => m.id === bot.modelId) || cfg.models[0]);
+  const usable = (cfg.models || []).filter((m) => m.apiKey || app.env[m.apiKeyEnv]);
+  let model = null;
+  const dm = String(cfg.distillModel || '').trim();
+  if (dm) model = usable.find((m) => m.id === dm) || null;          // 全局蒸馏模型（Key 缺失则忽略）
+  if (!model && bot) model = usable.find((m) => m.id === bot.modelId) || null;  // 跟随机器人绑定
+  if (!model) model = usable[0] || null;                            // 兜底：任一可用模型
   if (!model) return null;
   const apiKey = model.apiKey || app.env[model.apiKeyEnv];
-  if (!apiKey) return null;
   return async (messages, opts = {}) => {
     try {
       const r = await models.chat(model, messages, { apiKey, maxTokens: 400, ...opts });
@@ -116,13 +147,16 @@ async function chatWithBot(botId, content, opts = {}) {
   let res = null;
   let streamedAll = '';   // 跨轮累积的已流式文本（replace 前缀约束）
   const MAX_ROUNDS = 3;
+  // 流式推送前剥离【记录】元标记：模型按规则把它写在回复末尾，若随流式下发，
+  // 既会把内部指令暴露给用户，又会让结尾「replace 前缀」与剥离后的最终文本不一致导致结束片失败。
+  const streamClean = (t) => String(t || '').replace(/【记录】[\s\S]*$/, '').replace(/\s+$/, '');
   for (let round = 0; round < MAX_ROUNDS; round++) {
     try {
       if (opts.onDelta) {
         // 流式：SSE 收集，onDelta(本轮累积 + 之前各轮) 保持 replace 前缀连续
         const prev = streamedAll;
         res = await models.chatStreamCollect(model, messages, { apiKey, tools }, (accum) => {
-          try { opts.onDelta(prev + accum); } catch {}
+          try { opts.onDelta(streamClean(prev + accum)); } catch {}
         });
       } else {
         res = await models.chat(model, messages, { apiKey, tools });
@@ -135,7 +169,7 @@ async function chatWithBot(botId, content, opts = {}) {
           if (opts.onDelta) {
             const prev = streamedAll;
             res = await models.chatStreamCollect(model, messages, { apiKey, tools }, (accum) => {
-              try { opts.onDelta(prev + accum); } catch {}
+              try { opts.onDelta(streamClean(prev + accum)); } catch {}
             });
           } else {
             res = await models.chat(model, messages, { apiKey, tools });
@@ -201,6 +235,18 @@ function streamEnabled(bot, evt) {
   return app.getConfig().streamReply === true;
 }
 
+// 被动消息去重：QQ 网关可能重推/断线 Resume 补发同一事件，同一 msg_id 只处理一次
+// （不去重的后果：同一问题回复两遍）。窗口 10 分钟覆盖被动消息 5 分钟有效期。
+const _seenMsg = new Map();   // msgId -> 首次处理时间
+function isDupMsg(msgId) {
+  if (!msgId) return false;
+  const now = Date.now();
+  for (const [k, t] of _seenMsg) if (now - t > 600000) _seenMsg.delete(k);
+  if (_seenMsg.has(msgId)) return true;
+  _seenMsg.set(msgId, now);
+  return false;
+}
+
 app.handleMessage = async (botId, evt) => {
   console.log(`[bot:${botId}] handleMessage 被调用，evt=`, JSON.stringify(evt));
   const cfg = app.getConfig();
@@ -209,6 +255,10 @@ app.handleMessage = async (botId, evt) => {
 
   const content = String(evt.content || '').replace(/<@!?\d+>/g, '').trim();
   if (!content) return;
+  if (isDupMsg(evt.msgId)) {
+    console.log(`[bot:${botId}] 重复事件已忽略（msg …${String(evt.msgId).slice(-10)}）`);
+    return;
+  }
 
   const username = (evt.sender || evt.targetId || '').slice(0, 10) || '用户';
   console.log(`[${evt.scene}:${botId}] ${username}: ${content}`);
@@ -400,6 +450,10 @@ const server = http.createServer((req, res) => {
   let p;
   try { p = decodeURIComponent(new URL(req.url, 'http://127.0.0.1').pathname); } catch { p = '/'; }
 
+  // 跨域放行（桌面壳）：先挂响应头，再拦截预检
+  applyCors(req, res);
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
   // ---- API ----
   if (p.startsWith('/api/')) return handleApi(req, res, p);
 
@@ -517,10 +571,11 @@ function buildAdminSystem(cfg, botId) {
     }
     const files = memory.getMemoryFiles(botId);
     if (files.length) {
+      const tierName = { 1: '强制注入', 2: '摘要索引', 3: '冷记忆' };
       lines.push('');
       lines.push(`【机器人 ${botId} 记忆库（供总结/优化参考）】`);
       for (const f of files) {
-        lines.push(`--- ${f.name}（${f.key}）${f.enabled ? '' : '[已禁用]'} ---`);
+        lines.push(`--- ${f.name}（${f.key}）[层级:${tierName[f.tier] || '摘要索引'}]${f.enabled ? '' : '[已禁用]'}${f.sys ? '[系统生成]' : ''} ---`);
         lines.push((f.content || '').trim().slice(0, 1500));
       }
     }
@@ -822,6 +877,7 @@ function adminToolSchemas(webEnabled) {
 }
 
 const ADMIN_ID_RE = /^[\w\u4e00-\u9fa5-]{1,64}$/;
+const ID_RE = /^[\w\u4e00-\u9fa5-]{1,64}$/;
 
 // 管理员用模型选择：优先显式指定；未指定时按「已配置 Key 的可靠模型」优先级兜底
 // （小参数量/免费端点（如硅基 Qwen2.5-7B）可能不稳定/限流，不作为默认）
@@ -834,10 +890,8 @@ function adminPickModel(usable, id) {
 // ---- 提炼「精彩时刻」：读取记忆档案 + 最近对话，让模型产出 3 条高光片段并落盘 ----
 async function genBotMoments(b) {
   const cfg = app.getConfig();
-  const model = (cfg.models || []).find(m => m.id === b.modelId) || (cfg.models || [])[0];
-  if (!model) return { ok: false, err: '未绑定模型' };
-  const apiKey = model.apiKey || app.env[model.apiKeyEnv];
-  if (!apiKey) return { ok: false, err: '模型未配置 Key' };
+  const chatFn = makeChatFn(b.id);   // 蒸馏/总结任务统一走该入口（全局蒸馏模型 > 机器人绑定模型）
+  if (!chatFn) return { ok: false, err: '没有可用的蒸馏/总结模型（请配置模型 API Key，或在「设置 → 通用」指定蒸馏模型）' };
   const files = memory.getMemoryFiles(b.id).filter(f => f.enabled !== false).slice(0, 3);
   const memText = files.map(f => `【${f.key}】${String(f.content || '').trim().slice(0, 1200)}`).join('\n');
   const sessions = memory.getRecentSessions(b.id, 16);
@@ -846,12 +900,12 @@ async function genBotMoments(b) {
     : '（暂无会话记录）';
   const sys = '你是一名剧作编辑，擅长从角色对话与剧情档案中提炼“精彩时刻”。只输出 JSON，不要任何多余文字。' +
     '格式：{"moments":[{"title":"短语标题(≤14字)","summary":"一句话概括该时刻看点(≤40字)","quote":"该时刻最有代表性的角色原话或氛围句(≤24字)"}]} 数量恰好 3 条。';
-  const out = await models.chat(model, [
+  const out = await chatFn([
     { role: 'system', content: sys },
     { role: 'user', content: `角色记忆档案：\n${(memText || '（空）').slice(0, 3500)}\n\n最近对话：\n${conv.slice(0, 4200)}\n\n请提炼最能代表这个角色的 3 个「精彩时刻」。` },
-  ], { apiKey, maxTokens: 900, jsonMode: true });
+  ], { maxTokens: 900, jsonMode: true });
   // 解析：优先直解（jsonMode 保证单对象），失败降级括号配对（extractJsonObjects）
-  const raw = String(out?.content || '');
+  const raw = String(out || '');
   let objs = [];
   try { const j = JSON.parse(raw.replace(/```(?:json)?/g, '').trim()); if (j && typeof j === 'object') objs = [j]; } catch {}
   if (!objs.length) objs = extractJsonObjects(raw);
@@ -1237,21 +1291,41 @@ function handleApi(req, res, p) {
       port: cfg.port,
       webSearch: cfg.webSearch,
       searchMode: cfg.searchMode,
+      distillModel: cfg.distillModel || '',
       bots: cfg.bots.map((b) => ({ ...b, runtime: app.bots.getStatus(b.id) })),
+      streamReply: cfg.streamReply === true,
       models: cfg.models.map((m) => ({ ...m, hasKey: envMask[m.id] })),
     });
   }
 
   // PUT /api/config — 保存配置并热重载
+  // ID 需为安全字符集（中文/字母/数字/下划线/连字符），否则后续记忆目录、路由、内联事件均可能出错/注入
   if (p === '/api/config' && req.method === 'PUT') {
     readBody((body) => {
       const cfg = app.getConfig();
-      if (body.bots) cfg.bots = body.bots;
-      if (body.models) cfg.models = body.models;
+      if (body.bots) {
+        if (!Array.isArray(body.bots) || !body.bots.every((b) => b && ID_RE.test(String(b.id || ''))))
+          return send(400, { ok: false, err: '机器人 ID 含非法字符（仅允许中文/字母/数字/下划线/连字符，最长 64 位）' });
+        cfg.bots = body.bots;
+      }
+      if (body.models) {
+        if (!Array.isArray(body.models) || !body.models.every((m) => m && ID_RE.test(String(m.id || ''))))
+          return send(400, { ok: false, err: '模型 ID 含非法字符（仅允许中文/字母/数字/下划线/连字符，最长 64 位）' });
+        cfg.models = body.models;
+      }
       if (body.port) cfg.port = Number(body.port);
       if (body.webSearch === true || body.webSearch === false) cfg.webSearch = body.webSearch;
       if (body.streamReply === true || body.streamReply === false) cfg.streamReply = body.streamReply;
       if (['auto', 'light', 'browser'].includes(body.searchMode)) cfg.searchMode = body.searchMode;
+      // 全局「蒸馏/总结模型」：'' 表示跟随各机器人绑定模型；指定则所有后台总结任务统一使用该模型
+      if (body.distillModel !== undefined) {
+        const dm = String(body.distillModel || '').trim();
+        if (!dm) delete cfg.distillModel;
+        else {
+          if (!(cfg.models || []).some((m) => m.id === dm)) return send(400, { ok: false, err: '蒸馏/总结模型不存在: ' + dm });
+          cfg.distillModel = dm;
+        }
+      }
       app.saveConfig(cfg);
       app.bots.sync(cfg);
       seedHeart(cfg);
@@ -1426,6 +1500,14 @@ function handleApi(req, res, p) {
     return;
   }
 
+  // POST /api/memory/:id/seed-from-core — 从人格核心卡反向生成种子（persona.md）
+  m = /^\/api\/memory\/([\w\u4e00-\u9fa5-]+)\/seed-from-core$/.exec(p);
+  if (m && req.method === 'POST') {
+    try { send(200, memory.seedFromCore(m[1])); }
+    catch (err) { send(500, { ok: false, err: err.message }); }
+    return;
+  }
+
   // POST /api/memory/:id/distill — 手动蒸馏：核心卡 + 剧情/内容摘要 + 事件压缩
   m = /^\/api\/memory\/([\w\u4e00-\u9fa5-]+)\/distill$/.exec(p);
   if (m && req.method === 'POST') {
@@ -1438,17 +1520,15 @@ function handleApi(req, res, p) {
       const pick = (r) => (r.status === 'fulfilled' ? r.value : { ok: false, err: r.reason?.message || String(r.reason) });
       const results = await Promise.allSettled([
         memory.distillPersonaCore(m[1], chatFn),
-        memory.summarizeSource(m[1], 'plot', chatFn),
-        memory.summarizeSource(m[1], 'content', chatFn),
-        memory.compactEventsIfNeeded(m[1], chatFn),
+        memory.summarizeAllSources(m[1], chatFn, true),
+        memory.compactEventsIfNeeded(m[1], chatFn, true),
       ]);
       send(200, {
         ok: true,
         results: {
           core: pick(results[0]),
-          plot: pick(results[1]),
-          content: pick(results[2]),
-          events: pick(results[3]),
+          summaries: pick(results[1]),
+          events: pick(results[2]),
         },
       });
     })().catch((err) => send(200, { ok: false, err: err.message }));
@@ -1533,11 +1613,11 @@ function handleApi(req, res, p) {
     if (!apiKey) return send(400, { ok: false, err: '该模型的 API Key 未配置（直接填 Key，或在 .env 设置对应变量）' });
     models.chat(model, [{ role: 'user', content: 'ping' }], { apiKey, maxTokens: 32 })
       .then((res) => {
-        memory.recordUsage(m[1], m[1], { usage: res.usage, promptTokens: res.promptTokens, ok: true });
+        memory.recordUsage('模型测试', m[1], { usage: res.usage, promptTokens: res.promptTokens, ok: true });
         send(200, { ok: true, reply: (res?.content ?? '').slice(0, 200) });
       })
       .catch((err) => {
-        memory.recordUsage(m[1], m[1], { promptTokens: err.promptTokens, ok: false });
+        memory.recordUsage('模型测试', m[1], { promptTokens: err.promptTokens, ok: false });
         send(200, { ok: false, err: err.message });
       });
     return;
@@ -1602,7 +1682,8 @@ function handleApi(req, res, p) {
       const apiKey = model.apiKey || app.env[model.apiKeyEnv];
       if (!apiKey) return send(400, { ok: false, err: '模型未配置 API Key' });
       (async () => {
-        const files = memory.getMemoryFiles(bot.id).filter((f) => f.enabled);
+        // 系统生成文件（events_summary/events_archive）只读管理，不允许 AI 归档写入
+        const files = memory.getMemoryFiles(bot.id).filter((f) => f.enabled && !f.sys);
         if (!files.length) return send(400, { ok: false, err: '没有可用的记忆文件' });
         const listDesc = files.map((f) => `- ${f.key}（${f.name}）：${f.desc}`).join('\n');
         const sys = `你是记忆整理助手。用户会提供一段新信息（剧情进展、人物设定、特征、知识等），你需要把它归类到合适的记忆文件，并改写为简洁条目。
@@ -1613,16 +1694,12 @@ ${listDesc}
 2. 只输出一个 JSON 对象（不要任何其他文字，不要 markdown 代码块），格式：{"items":[{"file":"<上面某个key>","append":true,"content":"<简洁的条目内容>"}]}
 3. content 中不要出现英文双引号，保持纯文本。
 4. append=true 表示在文件末尾追加一条。若新信息是对现有设定的整体替换（如角色状态彻底改变），可输出 append:false 且 content 为完整的替换内容（谨慎，勿覆盖无关内容）。`;
-        // 调用模型并记录用量：成功用精确 usage，失败用估算兜底（jsonMode：不支持 response_format 的端点会自动去参重试）
-        let res, reply;
-        try {
-          res = await models.chat(model, [{ role: 'system', content: sys }, { role: 'user', content: text }], { apiKey, maxTokens: 500, jsonMode: true });
-          reply = res && typeof res === 'object' ? res.content : res;
-          memory.recordUsage(bot.id, model.id, { usage: res.usage, promptTokens: res.promptTokens, ok: true });
-        } catch (err) {
-          memory.recordUsage(bot.id, model.id, { promptTokens: err.promptTokens, ok: false });
-          throw err;
-        }
+        // 调用模型（makeChatFn 内部按「全局蒸馏模型 > 机器人绑定模型」选择并记录用量；
+        // jsonMode：不支持 response_format 的端点会自动去参重试）
+        const reply = await chatFn([
+          { role: 'system', content: sys },
+          { role: 'user', content: text },
+        ], { maxTokens: 500, jsonMode: true });
         // 解析：优先直解 {"items":[...]}；失败降级兼容旧版「每行一个 JSON 对象」
         const raw = String(reply || '');
         let items = [];
@@ -1829,7 +1906,7 @@ ${listDesc}
   }
 
   // ---- 机器人「精彩时刻」----
-  const momentsM = p.match(/^\/api\/moments\/([\w-]{1,40})$/);
+  const momentsM = p.match(/^\/api\/moments\/([\w\u4e00-\u9fa5-]{1,64})$/);
   if (momentsM) {
     const id = momentsM[1];
     const cfg = app.getConfig();
