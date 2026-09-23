@@ -2,6 +2,10 @@
 
 > **English · [中文](README.md)**
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)
+![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)
+
 A local, visual management tool for **multiple QQ bots + character persona/memory documents + any OpenAI-compatible model**, with a built-in **Panel Admin AI**, **heartbeat tasks**, and **highlight moments**. Everything runs in a build-free, vanilla frontend web panel.
 
 ```
@@ -16,10 +20,12 @@ QQ user sends message → bot gateway (qq-guild-bot over WebSocket)
 
 - [Feature Overview](#feature-overview)
 - [Quick Deploy](#quick-deploy-from-github-in-3-steps)
+- [Desktop Shell](#-desktop-shell-optional)
 - [Features in Detail](#features-in-detail)
 - [Structure](#structure)
 - [Config & Security](#config--security-important)
 - [FAQ](#faq)
+- [License](#license)
 
 ## Feature Overview
 
@@ -33,6 +39,7 @@ QQ user sends message → bot gateway (qq-guild-bot over WebSocket)
 | Heartbeat tasks | Bots speak proactively: timer / interval / random, card-based multi-task |
 | Highlight moments | AI extracts a character's standout moments onto the bot card |
 | Panel Admin AI | Built-in agent: read-only review → pending-approval edit proposals |
+| Desktop shell | Optional Tauri shell — the panel in its own window (1.18 MB installer) |
 | Appearance | Accent color, light/dark theme, card background effects |
 
 ## Quick Deploy (from GitHub in 3 steps)
@@ -52,6 +59,32 @@ Then set your credentials either way:
 2. open **http://127.0.0.1:4357** and add bots / models visually in the panel (saved automatically).
 
 > For web-search / browser features, Playwright prepares its browser engine on first use; for long-running processes use `pm2 start server.js --name qqbot-panel`.
+
+## 🖥 Desktop Shell (optional)
+
+The panel runs in a browser by default. If you'd rather have it in a **standalone window** (own taskbar icon and Start-menu entry, no browser tabs), the repo ships a thin Tauri shell — source in [`desktop/`](desktop/README.md).
+
+**The shell and the service are deliberately separate:**
+
+```
+┌─ Backend service (always on, must run first) ─┐
+│  node server.js                               │
+│  http://127.0.0.1:4357                        │
+│  Playwright engine + bot connections          │
+└───────────────────────────────────────────────┘
+              ↕ HTTP (CORS allowed server-side)
+┌─ Desktop shell (~8 MB / 1.18 MB installer) ───┐
+│  WebView2 renders the bundled frontend        │
+│  calls the API from tauri.localhost           │
+└───────────────────────────────────────────────┘
+```
+
+That split pays off: the shell doesn't carry Playwright (701 MB) or a Rust runtime, so the **installer is only 1.18 MB** — and restarting, tailing logs, or `pm2`-managing the service is independent of the window.
+
+- **Usage**: run `启动面板.bat` first, then open **QQBOT Console**. Reverse order just shows a "cannot reach backend" card with a retry button — no blank window.
+- **Build from source**: run `desktop/打包桌面版.bat`; toolchain deps (Rust + MSYS2/MinGW-w64) are prepared by scripts — **no admin rights, no Visual Studio**.
+- **CORS note**: on Windows the WebView2 origin is `http://tauri.localhost`, so `server.js` whitelists it (plus local dev ports — not a wildcard). Update the server alongside the frontend.
+- Design trade-offs, verification log and known limits: **[`desktop/README.md`](desktop/README.md)**.
 
 ## Features in Detail
 
@@ -165,8 +198,13 @@ lib/
   search.js          web search (light + browser)
   store.js           config read/write
 public/              Panel frontend (vanilla HTML/CSS/JS, no build step)
+desktop/             Optional desktop shell (Tauri 2 source, see desktop/README.md)
+  src-tauri/         Rust shell project (tauri.conf.json points at ../public)
+  scripts/           packaging / env self-check / toolchain bootstrap
+dist-setup/          Desktop installer output (build artifact, not committed)
 memory/              Runtime data: character memory & chat logs (do NOT commit)
 avatars/             Uploaded avatars (do NOT commit)
+LICENSE              MIT license
 ```
 
 ## Config & Security (important)
@@ -178,8 +216,11 @@ avatars/             Uploaded avatars (do NOT commit)
 | `memory/` | character memory, chat logs | **No** (gitignored) |
 | `avatars/` | uploaded avatars | No |
 | `config.example.json` / `.env.example` | public placeholders | Yes |
+| `dist-setup/` | desktop installer | No (build artifact, ships via Releases) |
+| `desktop/src-tauri/target/` | Rust build intermediates (~4 GB per run) | **No** (gitignored) |
 
 - The server listens on `127.0.0.1` only — the panel is local-only.
+- CORS is opened to an explicit allow-list only (`tauri.localhost`, `localhost:1420`) — never `*`. The panel itself is same-origin and needs no CORS.
 - Secrets can be stored directly in `config.json` or referenced as `env:VARIABLE_NAME` (recommended) so keys live in `.env`.
 - The panel echoes keys back for editing convenience, but traffic stays on this machine.
 - Before publishing this repo, make sure the runtime files above are not tracked; `.gitignore` excludes them by default.
@@ -191,3 +232,11 @@ avatars/             Uploaded avatars (do NOT commit)
 - **No reply / errors**: make sure the bot has a bound model and its `apiKeyEnv` key is valid (one-click test in the Models page).
 - **Persona drift**: edit `memory/<id>/persona.md` / `plot.md`, and toggle "use global settings" to control whether global prompts are layered in.
 - **Restart a storyline**: fork from history in Sessions, or summarize new events into memory files with AI filing.
+- **Desktop shell says "cannot reach backend"**: expected — `node server.js` isn't running. Start the service, then hit retry in the shell. Don't restart only the shell: the CORS allow-list lives in the server, so both must be the new version.
+- **`打包桌面版.bat` fails**: read `desktop/环境自检报告.txt` — it reports Rust / MSYS2 / WebView2 status individually. The first Rust dependency build is slow; that's normal.
+
+## License
+
+Released under the [MIT License](LICENSE) — use, modify and redistribute freely, keeping the copyright notice.
+
+QQ bot capabilities come from Tencent's official QQ Open Platform; follow their developer terms. This project is not affiliated with Tencent.
