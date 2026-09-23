@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "QQBOT Console",
+  "version": "0.1.0",
+  "identifier": "com.baicaibucai.qqbot-console",
+  "build": {
+    "frontendDist": "../../public"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "QQBOT 控制台",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "center": true,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "WebView2Loader.dll"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["SimpChinese"]
+      }
+    },
+    "createUpdaterArtifacts": false
+  }
+}

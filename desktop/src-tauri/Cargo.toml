@@ -1,0 +1,31 @@
+[package]
+# 这个 name 决定主程序的文件名（qqbot-console.exe），
+# 与界面上的 productName 是两回事 —— 后者在 tauri.conf.json 里。
+name = "qqbot-console"
+version = "0.1.0"
+description = "QQ 机器人管理面板的桌面壳（后端服务独立运行）"
+edition = "2021"
+rust-version = "1.77.2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# 保留 serde：tauri 的 generate_context! 宏在编译期解析配置时会用到它。
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# ---------------------------------------------------------------------------
+# 体积优化
+#
+# 这几行把 release 产物从几十 MB 压到几 MB。不影响功能，只影响编译时间：
+# lto = true 会让链接阶段明显变慢，所以改代码时用 debug 构建（启动桌面版.bat），
+# 只有真正出包才走 release。
+# ---------------------------------------------------------------------------
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

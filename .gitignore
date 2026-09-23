@@ -6,3 +6,9 @@ memory/
 avatars/
 logs/
 *.log
+
+# 桌面版（desktop/）编译产物：安装包走 GitHub Releases，不进版本库
+dist-setup/
+
+# 本地临时诊断产物
+.tmp-diagnostics/

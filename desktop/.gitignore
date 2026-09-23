@@ -1,0 +1,24 @@
+# 编译产物（本次编译产生了 4 GB，绝不能入库）
+src-tauri/target/
+
+# 依赖
+node_modules/
+
+# GNU 工具链配置：内容是本机 MinGW 的绝对路径，换台机器就不对
+src-tauri/.cargo/config.toml
+src-tauri/.cargo/
+
+# 自动更新签名私钥 —— 绝不能提交！
+# 丢了就再也无法给已安装的用户推送更新。
+.tauri-key
+.tauri-key.pub
+
+# 构建临时与日志
+.setup-tmp/
+*.log
+
+# Tauri 生成的 schema
+src-tauri/gen/
+
+# 自检报告（每次运行会重新生成）
+环境自检报告.txt
